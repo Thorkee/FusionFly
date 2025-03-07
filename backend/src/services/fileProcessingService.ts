@@ -5,6 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 import dotenv from 'dotenv';
 import readline from 'readline';
 import { promisify } from 'util';
+import * as nmeaSimple from 'nmea-simple';
+import { UBXParser } from '@csllc/ubx-parser';
 
 // Load environment variables
 dotenv.config();
@@ -17,50 +19,121 @@ const fileProcessingQueue = new Queue('file-processing', {
   }
 });
 
-// Process queue jobs
+// Define file interface for processing
+interface ProcessFile {
+  originalname: string;
+  filename: string;
+  path: string;
+}
+
+interface ProcessFilesData {
+  gnssFile?: ProcessFile;
+  imuFile?: ProcessFile;
+}
+
+// Update the queue processor to handle multiple files
 fileProcessingQueue.process(async (job) => {
-  const { filePath, originalFilename } = job.data;
+  const { gnssFile, imuFile } = job.data;
   
   try {
     // Update job progress
     await job.progress(10);
     
-    // Step 1: Detect file format
-    const fileExtension = path.extname(filePath).toLowerCase();
-    await job.progress(20);
-    
-    // Step 2: Convert to JSONL if needed
-    let jsonlFilePath = filePath;
-    if (fileExtension !== '.jsonl') {
-      const baseName = path.basename(filePath, fileExtension);
-      jsonlFilePath = path.join(path.dirname(filePath), `${baseName}.jsonl`);
-      
-      // Perform real conversion based on file extension
-      await convertToJsonl(filePath, jsonlFilePath, fileExtension);
-    }
-    await job.progress(60);
-    
-    // Step 3: Extract location data
-    const baseName = path.basename(jsonlFilePath, '.jsonl');
-    const locationFilePath = path.join(path.dirname(jsonlFilePath), `${baseName}.location.jsonl`);
-    
-    // Extract location data from JSONL
-    await extractLocationData(jsonlFilePath, locationFilePath);
-    await job.progress(100);
-    
-    return {
+    const result: any = {
       status: 'completed',
       message: 'File processing completed successfully',
-      files: {
+      files: {}
+    };
+    
+    // Process GNSS file if provided
+    if (gnssFile) {
+      const filePath = gnssFile.path;
+      const fileExtension = path.extname(filePath).toLowerCase();
+      
+      // Step 1: Convert to JSONL if needed
+      let jsonlFilePath = filePath;
+      if (fileExtension !== '.jsonl') {
+        const baseName = path.basename(filePath, fileExtension);
+        jsonlFilePath = path.join(path.dirname(filePath), `${baseName}.jsonl`);
+        
+        // Perform real conversion based on file extension
+        await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+      }
+      await job.progress(40);
+      
+      // Step 2: Extract location data
+      const baseName = path.basename(jsonlFilePath, '.jsonl');
+      const locationFilePath = path.join(path.dirname(jsonlFilePath), `${baseName}.location.jsonl`);
+      
+      // Extract location data from JSONL
+      await extractLocationData(jsonlFilePath, locationFilePath);
+      await job.progress(60);
+      
+      // Step 3: Validate the extracted location data
+      const validationResult = await validateLocationData(locationFilePath);
+      
+      // Create validation report if there are issues
+      let validationReportPath = null;
+      if (!validationResult.valid && validationResult.issues.length > 0) {
+        validationReportPath = path.join(path.dirname(locationFilePath), `${baseName}.validation.json`);
+        fs.writeFileSync(validationReportPath, JSON.stringify({
+          timestamp: new Date().toISOString(),
+          valid: validationResult.valid,
+          issues: validationResult.issues
+        }, null, 2));
+      }
+      
+      result.files.gnss = {
         original: path.basename(filePath),
         jsonl: path.basename(jsonlFilePath),
-        location: path.basename(locationFilePath)
+        location: path.basename(locationFilePath),
+        validation: validationReportPath ? path.basename(validationReportPath) : null
+      };
+      
+      result.gnssValidation = {
+        valid: validationResult.valid,
+        issueCount: validationResult.issues.length
+      };
+    }
+    
+    // Process IMU file if provided
+    if (imuFile) {
+      const filePath = imuFile.path;
+      const fileExtension = path.extname(filePath).toLowerCase();
+      
+      // Step 1: Convert to JSONL if needed
+      let jsonlFilePath = filePath;
+      if (fileExtension !== '.jsonl') {
+        const baseName = path.basename(filePath, fileExtension);
+        jsonlFilePath = path.join(path.dirname(filePath), `${baseName}.jsonl`);
+        
+        // Perform real conversion based on file extension
+        await convertToJsonl(filePath, jsonlFilePath, fileExtension);
       }
-    };
+      await job.progress(80);
+      
+      result.files.imu = {
+        original: path.basename(filePath),
+        jsonl: path.basename(jsonlFilePath)
+      };
+    }
+    
+    // If both GNSS and IMU data are provided, perform data fusion
+    if (gnssFile && imuFile) {
+      // Future enhancement: Implement GNSS+IMU data fusion with FGO
+      result.fusion = {
+        status: 'Planned for future release',
+        message: 'GNSS+IMU fusion will be available in a future update'
+      };
+    }
+    
+    await job.progress(100);
+    return result;
+    
   } catch (error: unknown) {
-    console.error('Error processing file:', error);
+    console.error('Error processing files:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    throw new Error(`Failed to process file: ${errorMessage}`);
+    throw new Error(`Failed to process files: ${errorMessage}`);
   }
 });
 
@@ -70,17 +143,27 @@ async function convertToJsonl(inputPath: string, outputPath: string, fileExtensi
   
   switch (fileExtension) {
     case '.obs':
+    case '.rnx':
+    case '.21o':
+    case '.22o':
+    case '.23o':
       await convertRinexToJsonl(inputPath, outputPath);
       break;
     case '.nmea':
-      await convertNmeaToJsonl(inputPath, outputPath);
-      break;
+    case '.gps':
     case '.txt':
       // Try to detect format based on content
       await detectAndConvertToJsonl(inputPath, outputPath);
       break;
     case '.json':
       await convertJsonToJsonl(inputPath, outputPath);
+      break;
+    case '.ubx':
+      await convertUbxToJsonl(inputPath, outputPath);
+      break;
+    case '.csv':
+      // For CSV files, try to detect if it's a GPS/GNSS format
+      await detectAndConvertToJsonl(inputPath, outputPath);
       break;
     default:
       // For unsupported formats, create a basic conversion with file content
@@ -92,11 +175,10 @@ async function convertToJsonl(inputPath: string, outputPath: string, fileExtensi
 async function convertRinexToJsonl(inputPath: string, outputPath: string): Promise<void> {
   console.log('Processing RINEX file');
   
-  const writeStream = fs.createWriteStream(outputPath);
-  
   try {
     // Since we can't use the georinex library directly in Node.js, 
     // we'll parse the RINEX file manually using basic rules
+    const writeStream = fs.createWriteStream(outputPath);
     const fileStream = fs.createReadStream(inputPath);
     const rl = readline.createInterface({
       input: fileStream,
@@ -107,66 +189,74 @@ async function convertRinexToJsonl(inputPath: string, outputPath: string): Promi
     let epochData: any = {};
     let epochTime = null;
     let lineCount = 0;
+    let recordCount = 0;
+    let parseError = false;
     
     for await (const line of rl) {
       lineCount++;
       
-      // Process header
-      if (!headerEnded) {
-        if (line.includes('END OF HEADER')) {
-          headerEnded = true;
-        }
-        continue;
-      }
-      
-      // Epoch line starts with '>'
-      if (line.trim().startsWith('>')) {
-        // If we have epoch data from a previous epoch, write it
-        if (epochTime && Object.keys(epochData).length > 0) {
-          const jsonlLine = JSON.stringify({
-            timestamp_ms: epochTime,
-            type: 'RINEX',
-            data: epochData
-          });
-          writeStream.write(jsonlLine + '\n');
+      try {
+        // Process header
+        if (!headerEnded) {
+          if (line.includes('END OF HEADER')) {
+            headerEnded = true;
+          }
+          continue;
         }
         
-        // Parse epoch time
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 7) {
-          const year = parseInt(parts[1]);
-          const month = parseInt(parts[2]);
-          const day = parseInt(parts[3]);
-          const hour = parseInt(parts[4]);
-          const minute = parseInt(parts[5]);
-          const second = parseFloat(parts[6]);
+        // Epoch line starts with '>'
+        if (line.trim().startsWith('>')) {
+          // If we have epoch data from a previous epoch, write it
+          if (epochTime && Object.keys(epochData).length > 0) {
+            const jsonlLine = JSON.stringify({
+              timestamp_ms: epochTime,
+              type: 'RINEX',
+              data: epochData
+            });
+            writeStream.write(jsonlLine + '\n');
+            recordCount++;
+          }
           
-          const date = new Date(Date.UTC(year, month - 1, day, hour, minute, Math.floor(second)));
-          epochTime = date.getTime() + (second % 1) * 1000;
-          epochData = {};
-        }
-      } 
-      // Observation data lines
-      else if (headerEnded && epochTime) {
-        // RINEX data is space-delimited
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 2) {
-          const satSystem = parts[0].charAt(0);
-          const satNumber = parseInt(parts[0].substring(1));
-          
-          if (!isNaN(satNumber)) {
-            // Process observation values
-            const observations: any = {};
-            for (let i = 1; i < parts.length; i++) {
-              const value = parseFloat(parts[i]);
-              if (!isNaN(value)) {
-                observations[`obs${i}`] = value;
-              }
-            }
+          // Parse epoch time
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 7) {
+            const year = parseInt(parts[1]);
+            const month = parseInt(parts[2]);
+            const day = parseInt(parts[3]);
+            const hour = parseInt(parts[4]);
+            const minute = parseInt(parts[5]);
+            const second = parseFloat(parts[6]);
             
-            epochData[`${satSystem}${satNumber}`] = observations;
+            const date = new Date(Date.UTC(year, month - 1, day, hour, minute, Math.floor(second)));
+            epochTime = date.getTime() + (second % 1) * 1000;
+            epochData = {};
+          }
+        } 
+        // Observation data lines
+        else if (headerEnded && epochTime) {
+          // RINEX data is space-delimited
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            const satSystem = parts[0].charAt(0);
+            const satNumber = parseInt(parts[0].substring(1));
+            
+            if (!isNaN(satNumber)) {
+              // Process observation values
+              const observations: any = {};
+              for (let i = 1; i < parts.length; i++) {
+                const value = parseFloat(parts[i]);
+                if (!isNaN(value)) {
+                  observations[`obs${i}`] = value;
+                }
+              }
+              
+              epochData[`${satSystem}${satNumber}`] = observations;
+            }
           }
         }
+      } catch (error) {
+        console.error(`Error parsing RINEX line ${lineCount}:`, error);
+        parseError = true;
       }
     }
     
@@ -178,14 +268,37 @@ async function convertRinexToJsonl(inputPath: string, outputPath: string): Promi
         data: epochData
       });
       writeStream.write(jsonlLine + '\n');
+      recordCount++;
     }
     
-    console.log(`Processed ${lineCount} lines from RINEX file`);
+    writeStream.end();
+    
+    console.log(`Processed ${lineCount} lines from RINEX file, created ${recordCount} records`);
+    
+    // If we encountered parsing errors or didn't extract any records, try AI-assisted parsing
+    if (parseError || recordCount === 0) {
+      console.log('Basic RINEX parsing had issues, trying AI-assisted parsing');
+      const aiSuccess = await aiAssistedParsing(inputPath, outputPath, 'RINEX');
+      
+      if (!aiSuccess) {
+        console.log('AI-assisted parsing failed, using basic parsing results');
+      }
+    }
   } catch (error) {
     console.error('Error converting RINEX to JSONL:', error);
-    throw error;
-  } finally {
-    writeStream.end();
+    
+    // Try AI-assisted parsing as a fallback
+    try {
+      console.log('Error in basic RINEX parsing, trying AI-assisted parsing');
+      const aiSuccess = await aiAssistedParsing(inputPath, outputPath, 'RINEX');
+      
+      if (!aiSuccess) {
+        throw error; // Re-throw the original error if AI parsing also fails
+      }
+    } catch (aiError) {
+      console.error('AI-assisted parsing also failed:', aiError);
+      throw error; // Throw the original error
+    }
   }
 }
 
@@ -193,9 +306,8 @@ async function convertRinexToJsonl(inputPath: string, outputPath: string): Promi
 async function convertNmeaToJsonl(inputPath: string, outputPath: string): Promise<void> {
   console.log('Processing NMEA file');
   
-  const writeStream = fs.createWriteStream(outputPath);
-  
   try {
+    const writeStream = fs.createWriteStream(outputPath);
     const fileStream = fs.createReadStream(inputPath);
     const rl = readline.createInterface({
       input: fileStream,
@@ -204,25 +316,54 @@ async function convertNmeaToJsonl(inputPath: string, outputPath: string): Promis
     
     let lineCount = 0;
     let recordCount = 0;
+    let parseErrors = 0;
     
     for await (const line of rl) {
       lineCount++;
       
-      // Parse NMEA sentence
-      const nmeaData = parseNmeaSentence(line.trim());
-      if (nmeaData) {
-        recordCount++;
-        const jsonlLine = JSON.stringify(nmeaData);
-        writeStream.write(jsonlLine + '\n');
+      try {
+        // Parse NMEA sentence
+        const nmeaData = parseNmeaSentence(line.trim());
+        if (nmeaData) {
+          recordCount++;
+          const jsonlLine = JSON.stringify(nmeaData);
+          writeStream.write(jsonlLine + '\n');
+        }
+      } catch (error) {
+        parseErrors++;
+        console.error(`Error parsing NMEA line ${lineCount}:`, error);
       }
     }
     
+    writeStream.end();
+    
     console.log(`Processed ${lineCount} lines, created ${recordCount} records from NMEA file`);
+    
+    // If we had a high error rate or few records, try AI-assisted parsing
+    const errorRate = parseErrors / lineCount;
+    if (errorRate > 0.2 || recordCount === 0) {
+      console.log('NMEA parsing had issues, trying AI-assisted parsing');
+      const aiSuccess = await aiAssistedParsing(inputPath, outputPath, 'NMEA');
+      
+      if (!aiSuccess) {
+        console.log('AI-assisted parsing failed, using basic parsing results');
+      }
+    }
   } catch (error) {
     console.error('Error converting NMEA to JSONL:', error);
-    throw error;
-  } finally {
-    writeStream.end();
+    
+    // Try AI-assisted parsing as a fallback
+    try {
+      console.log('Error in NMEA parsing, trying AI-assisted parsing');
+      const aiSuccess = await aiAssistedParsing(inputPath, outputPath, 'NMEA');
+      
+      if (!aiSuccess) {
+        throw error; // Re-throw the original error if AI parsing also fails
+      }
+    } catch (aiError) {
+      console.error('AI-assisted parsing also failed:', aiError);
+      throw error; // Throw the original error
+    }
   }
 }
 
@@ -238,97 +379,76 @@ function parseNmeaSentence(sentence: string): any {
     return null;
   }
   
-  const messageBody = sentence.substring(1, checksumIndex);
-  const providedChecksum = sentence.substring(checksumIndex + 1);
-  
-  // Calculate checksum (XOR of all characters between $ and *)
-  let calculatedChecksum = 0;
-  for (let i = 0; i < messageBody.length; i++) {
-    calculatedChecksum ^= messageBody.charCodeAt(i);
-  }
-  
-  const calculatedChecksumHex = calculatedChecksum.toString(16).toUpperCase().padStart(2, '0');
-  
-  // Check if checksum matches
-  if (providedChecksum !== calculatedChecksumHex) {
-    return null;
-  }
-  
-  // Parse the sentence parts
-  const parts = messageBody.split(',');
-  const messageType = parts[0];
-  
-  const timestamp = new Date().getTime(); // Default to current time
-  
-  // Handle different message types
-  switch (messageType) {
-    case 'GPGGA': // Global Positioning System Fix Data
-      if (parts.length < 15) return null;
-      
-      const time = parts[1];
-      const lat = parts[2];
-      const latDir = parts[3];
-      const lon = parts[4];
-      const lonDir = parts[5];
-      const quality = parts[6];
-      const numSatellites = parts[7];
-      const hdop = parts[8];
-      const altitude = parts[9];
-      const altitudeUnit = parts[10];
-      
-      if (!lat || !lon) return null;
-      
-      const latDec = convertNmeaCoordinate(lat, latDir);
-      const lonDec = convertNmeaCoordinate(lon, lonDir);
-      
-      return {
-        timestamp_ms: timestamp,
-        type: 'NMEA',
-        message_type: 'GGA',
-        latitude: latDec,
-        longitude: lonDec,
-        altitude: altitude ? parseFloat(altitude) : null,
-        quality: quality ? parseInt(quality) : null,
-        num_satellites: numSatellites ? parseInt(numSatellites) : null,
-        hdop: hdop ? parseFloat(hdop) : null
-      };
-      
-    case 'GPRMC': // Recommended Minimum Specific GNSS Data
-      if (parts.length < 12) return null;
-      
-      const rmc_time = parts[1];
-      const status = parts[2]; // A=active, V=void
-      const rmc_lat = parts[3];
-      const rmc_latDir = parts[4];
-      const rmc_lon = parts[5];
-      const rmc_lonDir = parts[6];
-      const speed = parts[7]; // in knots
-      const course = parts[8]; // in degrees
-      const date = parts[9]; // DDMMYY
-      
-      if (status !== 'A' || !rmc_lat || !rmc_lon) return null;
-      
-      const rmc_latDec = convertNmeaCoordinate(rmc_lat, rmc_latDir);
-      const rmc_lonDec = convertNmeaCoordinate(rmc_lon, rmc_lonDir);
-      
-      return {
-        timestamp_ms: timestamp,
-        type: 'NMEA',
-        message_type: 'RMC',
-        latitude: rmc_latDec,
-        longitude: rmc_lonDec,
-        speed: speed ? parseFloat(speed) * 0.514444 : null, // Convert knots to m/s
-        course: course ? parseFloat(course) : null
-      };
-      
-    default:
-      // Other NMEA sentence types - just store type and parts
-      return {
-        timestamp_ms: timestamp,
-        type: 'NMEA',
-        message_type: messageType,
-        raw_data: parts.slice(1)
-      };
+  try {
+    // Use nmea-simple library for parsing
+    const parsedSentence = nmeaSimple.parseNmeaSentence(sentence);
+    
+    // Create standardized output
+    const timestamp = new Date().getTime(); // Default to current time
+    let result: any = {
+      timestamp_ms: timestamp,
+      type: 'NMEA',
+      message_type: parsedSentence.sentenceId
+    };
+    
+    // Handle different message types
+    switch (parsedSentence.sentenceId) {
+      case 'GGA': {
+        const gga = parsedSentence as nmeaSimple.GGAPacket;
+        result.latitude = gga.latitude;
+        result.longitude = gga.longitude;
+        result.altitude = gga.altitudeMeters;
+        result.quality = gga.fixType;
+        result.num_satellites = gga.satellitesInView;
+        result.hdop = gga.horizontalDilution;
+        break;
+      }
+      case 'RMC': {
+        const rmc = parsedSentence as nmeaSimple.RMCPacket;
+        result.latitude = rmc.latitude;
+        result.longitude = rmc.longitude;
+        result.speed = rmc.speedKnots * 0.514444; // Convert knots to m/s
+        result.course = rmc.trackTrue;
+        break;
+      }
+      case 'GSA': {
+        const gsa = parsedSentence as nmeaSimple.GSAPacket;
+        result.hdop = gsa.HDOP;
+        result.pdop = gsa.PDOP;
+        result.vdop = gsa.VDOP;
+        result.fix_type = gsa.fixMode;
+        result.fix_mode = gsa.selectionMode;
+        result.satellites_used = gsa.satellites;
+        break;
+      }
+      case 'GSV': {
+        const gsv = parsedSentence as nmeaSimple.GSVPacket;
+        result.num_satellites_in_view = gsv.satellitesInView;
+        result.satellite_data = gsv.satellites;
+        break;
+      }
+      default:
+        // For other sentence types, include the raw data
+        result.raw_data = parsedSentence;
+        break;
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error parsing NMEA sentence:', error);
+    
+    // Fall back to basic parsing if nmea-simple fails
+    const messageBody = sentence.substring(1, checksumIndex);
+    const parts = messageBody.split(',');
+    const messageType = parts[0];
+    
+    // Create a basic result with the message type
+    return {
+      timestamp_ms: new Date().getTime(),
+      type: 'NMEA',
+      message_type: messageType,
+      raw_data: parts.slice(1)
+    };
   }
 }
 
@@ -381,8 +501,32 @@ async function detectAndConvertToJsonl(inputPath: string, outputPath: string): P
     // Looks like JSON
     await convertJsonToJsonl(inputPath, outputPath);
   } else {
-    // Unknown format, use basic conversion
-    await basicFileToJsonl(inputPath, outputPath);
+    // Check for UBX format (binary format)
+    // UBX packets start with 0xB5 0x62 (µb in ASCII)
+    try {
+      const buffer = fs.readFileSync(inputPath);
+      let isUbx = false;
+      
+      // Check for UBX header in the first 1000 bytes
+      for (let i = 0; i < Math.min(buffer.length - 1, 1000); i++) {
+        if (buffer[i] === 0xB5 && buffer[i + 1] === 0x62) {
+          isUbx = true;
+          break;
+        }
+      }
+      
+      if (isUbx) {
+        // Looks like UBX
+        await convertUbxToJsonl(inputPath, outputPath);
+      } else {
+        // Unknown format, use basic conversion
+        await basicFileToJsonl(inputPath, outputPath);
+      }
+    } catch (error) {
+      console.error('Error detecting file format:', error);
+      // Fall back to basic conversion
+      await basicFileToJsonl(inputPath, outputPath);
+    }
   }
 }
 
@@ -541,6 +685,46 @@ function extractLocationFromRecord(record: any): any {
       
       return result;
     }
+  } else if (record.type === 'UBX') {
+    // Extract from UBX record
+    if (record.latitude !== undefined && record.longitude !== undefined) {
+      result.latitude = record.latitude;
+      result.longitude = record.longitude;
+      
+      if (record.altitude !== undefined) {
+        result.altitude = record.altitude;
+      }
+      
+      if (record.num_satellites !== undefined) {
+        result.num_satellites = record.num_satellites;
+      }
+      
+      if (record.h_accuracy !== undefined) {
+        result.h_accuracy = record.h_accuracy;
+      }
+      
+      if (record.v_accuracy !== undefined) {
+        result.v_accuracy = record.v_accuracy;
+      }
+      
+      if (record.speed !== undefined) {
+        result.speed = record.speed;
+      }
+      
+      if (record.heading !== undefined) {
+        result.heading = record.heading;
+      }
+      
+      if (record.pdop !== undefined) {
+        result.pdop = record.pdop;
+      }
+      
+      if (record.fix_type !== undefined) {
+        result.fix_type = record.fix_type;
+      }
+      
+      return result;
+    }
   } else {
     // Try to extract from unknown format
     if (record.latitude !== undefined && record.longitude !== undefined) {
@@ -577,16 +761,258 @@ function extractLocationFromRecord(record: any): any {
   return null;
 }
 
+// Convert UBX format to JSONL
+async function convertUbxToJsonl(inputPath: string, outputPath: string): Promise<void> {
+  console.log('Processing UBX file');
+  
+  const writeStream = fs.createWriteStream(outputPath);
+  
+  try {
+    // Read the file as a binary buffer
+    const fileBuffer = fs.readFileSync(inputPath);
+    
+    // Create a UBX parser
+    const parser = new UBXParser();
+    const packets: any[] = [];
+    
+    // Register parsers for specific message types
+    try {
+      const { UBX_NAV_PVT_Parser, UBX_NAV_SAT_Parser } = require('@csllc/ubx-parser');
+      parser.registerParser(new UBX_NAV_PVT_Parser());
+      parser.registerParser(new UBX_NAV_SAT_Parser());
+    } catch (error) {
+      console.warn('Could not register UBX parsers:', error);
+    }
+    
+    // Register event handler for parsed packets
+    parser.on('data', (packet: any) => {
+      if (packet && packet.messageClass !== undefined && packet.messageId !== undefined) {
+        // Convert to standardized format
+        const timestamp = new Date().getTime();
+        const jsonlRecord: any = {
+          timestamp_ms: timestamp,
+          type: 'UBX',
+          message_class: `0x${packet.messageClass.toString(16).padStart(2, '0')}`,
+          message_id: `0x${packet.messageId.toString(16).padStart(2, '0')}`,
+          data: packet.payload
+        };
+        
+        // Extract location data if available
+        if (packet.messageClass === 0x01) {
+          // NAV class messages
+          switch (packet.messageId) {
+            case 0x02: // NAV-POSLLH
+              if (packet.payload && packet.payload.length >= 28) {
+                // Extract position data
+                const view = new DataView(packet.payload.buffer);
+                const iTOW = view.getUint32(0, true); // GPS time of week (ms)
+                const lon = view.getInt32(4, true) * 1e-7; // Longitude (deg)
+                const lat = view.getInt32(8, true) * 1e-7; // Latitude (deg)
+                const height = view.getInt32(12, true); // Height above ellipsoid (mm)
+                const hMSL = view.getInt32(16, true); // Height above mean sea level (mm)
+                const hAcc = view.getUint32(20, true); // Horizontal accuracy (mm)
+                const vAcc = view.getUint32(24, true); // Vertical accuracy (mm)
+                
+                jsonlRecord.latitude = lat;
+                jsonlRecord.longitude = lon;
+                jsonlRecord.altitude = hMSL / 1000; // Convert mm to m
+                jsonlRecord.h_accuracy = hAcc / 1000; // Convert mm to m
+                jsonlRecord.v_accuracy = vAcc / 1000; // Convert mm to m
+              }
+              break;
+              
+            case 0x07: // NAV-PVT
+              if (packet.payload && typeof packet.payload === 'object') {
+                // For NAV-PVT, the payload might be parsed by a registered parser
+                const pvtData = packet.payload as any;
+                
+                if (pvtData.lat !== undefined && pvtData.lon !== undefined) {
+                  // Create a proper timestamp from the UBX time if available
+                  if (pvtData.year && pvtData.month && pvtData.day && 
+                      pvtData.hour !== undefined && pvtData.min !== undefined && pvtData.sec !== undefined) {
+                    const date = new Date(Date.UTC(pvtData.year, pvtData.month - 1, pvtData.day, 
+                                                  pvtData.hour, pvtData.min, pvtData.sec));
+                    jsonlRecord.timestamp_ms = date.getTime();
+                  }
+                  
+                  jsonlRecord.latitude = pvtData.lat * 1e-7; // Convert to degrees
+                  jsonlRecord.longitude = pvtData.lon * 1e-7; // Convert to degrees
+                  jsonlRecord.altitude = pvtData.hMSL / 1000; // Convert mm to m
+                  jsonlRecord.num_satellites = pvtData.numSV;
+                  jsonlRecord.h_accuracy = pvtData.hAcc / 1000; // Convert mm to m
+                  jsonlRecord.v_accuracy = pvtData.vAcc / 1000; // Convert mm to m
+                  jsonlRecord.speed = pvtData.gSpeed / 1000; // Convert mm/s to m/s
+                  jsonlRecord.heading = pvtData.headMot;
+                  jsonlRecord.pdop = pvtData.pDOP;
+                  jsonlRecord.fix_type = pvtData.fixType;
+                }
+              }
+              break;
+          }
+        }
+        
+        // Write the record to JSONL
+        writeStream.write(JSON.stringify(jsonlRecord) + '\n');
+        packets.push(jsonlRecord);
+      }
+    });
+    
+    // Parse the buffer
+    parser.parse(fileBuffer);
+    
+    console.log(`Processed UBX file, found ${packets.length} packets`);
+  } catch (error) {
+    console.error('Error converting UBX to JSONL:', error);
+    throw error;
+  } finally {
+    writeStream.end();
+  }
+}
+
+// AI-assisted parsing for complex formats
+async function aiAssistedParsing(inputPath: string, outputPath: string, format: string): Promise<boolean> {
+  console.log(`Attempting AI-assisted parsing for ${format} format`);
+  
+  try {
+    // This is a placeholder for AI-assisted parsing
+    // In a real implementation, this would call an AI service to analyze the file
+    // and generate appropriate parsing logic
+    
+    // For now, we'll just return false to indicate that AI parsing was not successful
+    // and the system should fall back to basic parsing
+    
+    // In a real implementation, this function would:
+    // 1. Send a sample of the file to an AI service
+    // 2. Get back parsing instructions or a parsing function
+    // 3. Apply the parsing logic to convert the file to JSONL
+    // 4. Return true if successful
+    
+    return false;
+  } catch (error) {
+    console.error(`Error in AI-assisted parsing for ${format}:`, error);
+    return false;
+  }
+}
+
+// Validate standardized location data
+async function validateLocationData(inputPath: string): Promise<{ valid: boolean, issues: string[] }> {
+  console.log(`Validating location data in ${inputPath}`);
+  
+  const issues: string[] = [];
+  let recordCount = 0;
+  let validRecordCount = 0;
+  
+  try {
+    const fileStream = fs.createReadStream(inputPath);
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity
+    });
+    
+    let prevTimestamp: number | null = null;
+    
+    for await (const line of rl) {
+      recordCount++;
+      
+      try {
+        const record = JSON.parse(line);
+        
+        // Check required fields
+        if (!record.timestamp_ms) {
+          issues.push(`Record ${recordCount}: Missing timestamp`);
+          continue;
+        }
+        
+        // Validate timestamp
+        if (typeof record.timestamp_ms !== 'number' || isNaN(record.timestamp_ms)) {
+          issues.push(`Record ${recordCount}: Invalid timestamp format`);
+          continue;
+        }
+        
+        // Check timestamp sequence
+        if (prevTimestamp !== null && record.timestamp_ms < prevTimestamp) {
+          issues.push(`Record ${recordCount}: Timestamp out of sequence`);
+        }
+        prevTimestamp = record.timestamp_ms;
+        
+        // Validate coordinates if present
+        if (record.latitude !== undefined && record.longitude !== undefined) {
+          // Check latitude range (-90 to 90)
+          if (typeof record.latitude !== 'number' || 
+              isNaN(record.latitude) || 
+              record.latitude < -90 || 
+              record.latitude > 90) {
+            issues.push(`Record ${recordCount}: Invalid latitude value ${record.latitude}`);
+            continue;
+          }
+          
+          // Check longitude range (-180 to 180)
+          if (typeof record.longitude !== 'number' || 
+              isNaN(record.longitude) || 
+              record.longitude < -180 || 
+              record.longitude > 180) {
+            issues.push(`Record ${recordCount}: Invalid longitude value ${record.longitude}`);
+            continue;
+          }
+        }
+        
+        // Validate altitude if present
+        if (record.altitude !== undefined) {
+          if (typeof record.altitude !== 'number' || isNaN(record.altitude)) {
+            issues.push(`Record ${recordCount}: Invalid altitude value ${record.altitude}`);
+            continue;
+          }
+        }
+        
+        // Validate num_satellites if present
+        if (record.num_satellites !== undefined) {
+          if (typeof record.num_satellites !== 'number' || 
+              !Number.isInteger(record.num_satellites) || 
+              record.num_satellites < 0) {
+            issues.push(`Record ${recordCount}: Invalid num_satellites value ${record.num_satellites}`);
+            continue;
+          }
+        }
+        
+        // Validate hdop if present
+        if (record.hdop !== undefined) {
+          if (typeof record.hdop !== 'number' || isNaN(record.hdop) || record.hdop < 0) {
+            issues.push(`Record ${recordCount}: Invalid hdop value ${record.hdop}`);
+            continue;
+          }
+        }
+        
+        // Record is valid
+        validRecordCount++;
+      } catch (error) {
+        issues.push(`Record ${recordCount}: Invalid JSON format`);
+      }
+    }
+    
+    console.log(`Validated ${recordCount} records, found ${validRecordCount} valid records and ${issues.length} issues`);
+    
+    return {
+      valid: issues.length === 0,
+      issues
+    };
+  } catch (error) {
+    console.error('Error validating location data:', error);
+    issues.push(`File error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    
+    return {
+      valid: false,
+      issues
+    };
+  }
+}
+
 export const fileProcessingService = {
-  // Start processing a file
-  processFile: async (filePath: string, originalFilename: string): Promise<string> => {
+  // Process multiple files (GNSS and/or IMU)
+  processFiles: async (files: ProcessFilesData): Promise<string> => {
     const jobId = uuidv4();
     
     await fileProcessingQueue.add(
-      {
-        filePath,
-        originalFilename
-      },
+      files,
       {
         jobId,
         attempts: 3,
@@ -598,6 +1024,17 @@ export const fileProcessingService = {
     );
     
     return jobId;
+  },
+  
+  // Original processFile function (for backward compatibility)
+  processFile: async (filePath: string, originalFilename: string): Promise<string> => {
+    return fileProcessingService.processFiles({
+      gnssFile: {
+        originalname: originalFilename,
+        filename: path.basename(filePath),
+        path: filePath
+      }
+    });
   },
   
   // Get the status of a processing job

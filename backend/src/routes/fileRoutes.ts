@@ -20,26 +20,31 @@ const storage = multer.diskStorage({
 
 // File filter to accept only certain file types
 const fileFilter = (req: express.Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const allowedExtensions = ['.nmea', '.obs', '.jsonl', '.json', '.txt'];
+  const allowedExtensions = ['.nmea', '.obs', '.rnx', '.jsonl', '.json', '.txt', '.csv', '.imu', '.bin', '.ubx', '.21o', '.22o', '.23o'];
   const fileExtension = path.extname(file.originalname).toLowerCase();
   
   if (allowedExtensions.includes(fileExtension)) {
     cb(null, true);
   } else {
-    cb(new Error('File type not supported. Please upload NMEA, OBS, JSONL, JSON, or TXT files.'));
+    cb(new Error('File type not supported. Please upload NMEA, RINEX, UBX, IMU, JSON, CSV, or TXT files.'));
   }
 };
 
 const upload = multer({ 
   storage, 
   fileFilter,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
 });
 
 // Routes
-router.post('/upload', upload.single('file'), fileController.uploadFile);
+router.post('/upload', upload.fields([
+  { name: 'gnssFile', maxCount: 1 },
+  { name: 'imuFile', maxCount: 1 }
+]), fileController.uploadFile);
+
 router.get('/status/:id', fileController.getProcessingStatus);
 router.get('/download/:filename', fileController.downloadFile);
 router.get('/list', fileController.listFiles);
+router.post('/clear-cache', fileController.clearCache);
 
 export { router as fileRoutes }; 

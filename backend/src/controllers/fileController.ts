@@ -4,27 +4,49 @@ import fs from 'fs';
 import { fileProcessingService } from '../services/fileProcessingService';
 
 export const fileController = {
-  // Upload a file and start processing
+  // Upload files (GNSS and/or IMU) and start processing
   uploadFile: async (req: Request, res: Response) => {
     try {
-      if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      
+      if (!files || ((!files.gnssFile || files.gnssFile.length === 0) && 
+                   (!files.imuFile || files.imuFile.length === 0))) {
+        return res.status(400).json({ error: 'No files uploaded. Please upload at least one GNSS or IMU file.' });
       }
 
-      const { originalname, filename, path: filePath } = req.file;
+      const gnssFile = files.gnssFile?.[0];
+      const imuFile = files.imuFile?.[0];
       
-      // Start processing the file
-      const jobId = await fileProcessingService.processFile(filePath, originalname);
+      // Start processing the file(s)
+      const jobId = await fileProcessingService.processFiles({
+        gnssFile: gnssFile ? {
+          originalname: gnssFile.originalname,
+          filename: gnssFile.filename,
+          path: gnssFile.path
+        } : undefined,
+        imuFile: imuFile ? {
+          originalname: imuFile.originalname,
+          filename: imuFile.filename,
+          path: imuFile.path
+        } : undefined
+      });
       
       res.status(200).json({
-        message: 'File uploaded successfully',
+        message: 'Files uploaded successfully',
         jobId,
-        filename,
-        originalname
+        gnssFile: gnssFile ? {
+          filename: gnssFile.filename,
+          originalname: gnssFile.originalname
+        } : null,
+        imuFile: imuFile ? {
+          filename: imuFile.filename,
+          originalname: imuFile.originalname
+        } : null
       });
     } catch (error) {
-      console.error('Error uploading file:', error);
-      res.status(500).json({ error: 'Failed to upload file' });
+      console.error('Error uploading files:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to upload files';
+      res.status(500).json({ error: errorMessage });
     }
   },
 
@@ -66,6 +88,12 @@ export const fileController = {
   listFiles: (req: Request, res: Response) => {
     try {
       const uploadsDir = path.join(__dirname, '../../uploads');
+      
+      // Create the directory if it doesn't exist
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
       const files = fs.readdirSync(uploadsDir)
         .filter(file => !file.startsWith('.')) // Filter out hidden files
         .map(file => {
@@ -82,6 +110,37 @@ export const fileController = {
     } catch (error) {
       console.error('Error listing files:', error);
       res.status(500).json({ error: 'Failed to list files' });
+    }
+  },
+  
+  // Clear cache (delete all files in uploads directory)
+  clearCache: (req: Request, res: Response) => {
+    try {
+      const uploadsDir = path.join(__dirname, '../../uploads');
+      
+      // Check if directory exists
+      if (!fs.existsSync(uploadsDir)) {
+        return res.status(200).json({ message: 'No cache to clear' });
+      }
+      
+      const files = fs.readdirSync(uploadsDir)
+        .filter(file => !file.startsWith('.'));  // Filter out hidden files
+      
+      // Delete each file
+      let deletedCount = 0;
+      for (const file of files) {
+        const filePath = path.join(uploadsDir, file);
+        fs.unlinkSync(filePath);
+        deletedCount++;
+      }
+      
+      res.status(200).json({ 
+        message: 'Cache cleared successfully', 
+        deletedCount 
+      });
+    } catch (error) {
+      console.error('Error clearing cache:', error);
+      res.status(500).json({ error: 'Failed to clear cache' });
     }
   }
 }; 
