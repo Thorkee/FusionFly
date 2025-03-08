@@ -1,243 +1,160 @@
-# FusionAgent: GNSS+IMU Data Fusion System
+# FusionFly: GNSS+IMU Data Fusion System
 
-![FusionAgent](https://img.shields.io/badge/FusionAgent-1.0.0-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![React](https://img.shields.io/badge/React-18.x-61dafb)
-![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![FusionFly](https://img.shields.io/badge/FusionFly-1.0.0-blue)
+[![React](https://img.shields.io/badge/React-18.x-blue)](https://reactjs.org/)
+[![Express](https://img.shields.io/badge/Express-4.x-lightgrey)](https://expressjs.com/)
 
-FusionAgent is an open-source toolkit for processing and fusing GNSS (Global Navigation Satellite System) and IMU (Inertial Measurement Unit) data with Factor Graph Optimization (FGO). The system provides a modern web interface for uploading, processing, visualizing, and downloading standardized navigation data.
+FusionFly is an open-source toolkit for processing and fusing GNSS (Global Navigation Satellite System) and IMU (Inertial Measurement Unit) data with Factor Graph Optimization (FGO). The system provides a web-based interface for uploading, processing, and visualizing positioning data.
 
 ## System Architecture
 
-FusionAgent follows a standard client-server architecture with a React frontend, Express.js backend, and Redis job queue for processing large files.
+FusionFly follows a standard client-server architecture with a React frontend, Express.js backend, and Redis job queue for processing large files.
 
 ```
-┌─────────────────┐          ┌─────────────────┐          ┌─────────────────┐
-│                 │          │                 │          │                 │
-│  React Frontend │◄────────►│  Express Backend│◄────────►│   Redis Queue   │
-│                 │   HTTP   │                 │   Jobs   │                 │
-└────────┬────────┘          └────────┬────────┘          └────────┬────────┘
-         │                            │                            │
-         │                            │                            │
-         ▼                            ▼                            ▼
-┌─────────────────┐          ┌─────────────────┐          ┌─────────────────┐
-│  User Interface │          │  File Storage   │          │  Data Processing│
-│  - File Upload  │          │  - Raw Files    │          │  - Conversion   │
-│  - Visualization│          │  - Processed    │          │  - FGO          │
-│  - Downloads    │          │  - Results      │          │  - Validation   │
-└─────────────────┘          └─────────────────┘          └─────────────────┘
+┌───────────────┐     ┌───────────────┐     ┌───────────────┐
+│               │     │               │     │               │
+│  React        │     │  Express.js   │     │  Redis Queue  │
+│  Frontend     │◄───►│  Backend      │◄───►│  (Bull)       │
+│               │     │               │     │               │
+└───────────────┘     └───────────────┘     └───────────────┘
+        │                     │                     │
+        │                     │                     │
+        │                     ▼                     │
+        │             ┌───────────────┐             │
+        │             │               │             │
+        └────────────►│  Result &     │◄────────────┘
+                      │  File Storage │
+                      │               │
+                      └───────────────┘
 ```
 
 ## Data Flow Pipeline
 
-FusionAgent processes data through a well-defined pipeline:
+FusionFly processes data through a well-defined pipeline:
 
 ```
-┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐
-│           │     │           │     │           │     │           │     │           │
-│  File     │────►│  Format   │────►│ Conversion│────►│  Process  │────►│  Output   │
-│  Upload   │     │  Detection│     │ to JSONL  │     │  & Fusion │     │  Results  │
-│           │     │           │     │           │     │           │     │           │
-└───────────┘     └───────────┘     └───────────┘     └───────────┘     └───────────┘
-       │                │                │                │                   │
-       ▼                ▼                ▼                ▼                   ▼
-┌───────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                   │
-│  Supported Input Formats                │  Output Formats                         │
-│  ─────────────────────                 │  ─────────────────                      │
-│  GNSS:                                 │  Standardized JSONL                      │
-│  - RINEX (.obs, .rnx, .21o)            │  Location Data                           │
-│  - NMEA (.nmea, .gps, .txt)            │  Trajectory Visualization                │
-│  - UBX (binary)                        │  Validation Reports                      │
-│  - JSON, CSV                           │                                          │
-│                                        │                                          │
-│  IMU:                                  │                                          │
-│  - Raw IMU data (.imu)                 │                                          │
-│  - CSV, JSON, TXT                      │                                          │
-│                                        │                                          │
-└───────────────────────────────────────────────────────────────────────────────────┘
+┌─────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│         │     │          │     │          │     │          │     │          │
+│ Upload  │────►│ Format   │────►│ Extract  │────►│ FGO      │────►│ Output   │
+│ Files   │     │ Detection│     │ Data     │     │ Process  │     │ Results  │
+│         │     │          │     │          │     │          │     │          │
+└─────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
 ```
 
-## Component Descriptions
+1. **Upload Files**: Users upload GNSS (RINEX, NMEA, UBX) and IMU data files
+2. **Format Detection**: The system automatically detects file formats
+3. **Data Extraction**: Navigation data is parsed and normalized
+4. **FGO Processing**: Factor Graph Optimization algorithms fuse multiple sensor data
+5. **Output Results**: Results are displayed visually and available for download
+
+## Components
 
 ### Frontend (React)
-
-The frontend is built with React and provides a modern user interface for interacting with the system. It includes:
-
-1. **Home Page**: Overview of the system and its capabilities
-2. **Upload Interface**: 
-   - Drag-and-drop file upload for GNSS and IMU data
-   - Progress tracking for uploads and processing
-   - Format detection and validation
-3. **Files Page**: 
-   - List of processed files with metadata
-   - Download options for processed data
-   - Cache management
-4. **Results Visualization**: (Coming soon)
-   - Trajectory visualization
-   - Error analysis
-   - Quality metrics
+- **File Upload Component**: Handles file selection and upload
+- **Processing Status**: Real-time updates during processing
+- **File List**: View and download processed files
+- **Visualization**: Interactive graphs and maps of results
 
 ### Backend (Express.js)
-
-The backend provides the API endpoints and processing logic:
-
-1. **API Layer**:
-   - RESTful API for file operations
-   - Status reporting
-   - Error handling
-2. **Processing Engine**:
-   - Format detection and conversion
-   - GNSS data parsing (RINEX, NMEA, UBX)
-   - IMU data processing
-   - Data fusion with FGO (Factor Graph Optimization)
-3. **Storage Management**:
-   - File storage
-   - Processing results
-   - Cache management
+- **File Routes**: API endpoints for file operations
+- **Processing Services**: File format detection and processing
+- **Job Queue**: Manages long-running processing tasks
+- **Storage Services**: Handles file storage and retrieval
 
 ### Job Queue (Redis/Bull)
+- **Worker Processes**: Executes CPU-intensive processing jobs
+- **Job Status Tracking**: Monitors and reports processing status
+- **Error Handling**: Manages failures and retries
 
-Long-running processing tasks are handled by a Redis-backed job queue:
-
-1. **Job Management**:
-   - Job creation and tracking
-   - Progress reporting
-   - Error handling and retries
-2. **Worker Processes**:
-   - File conversion
-   - Data processing
-   - Result generation
-
-## Detailed Process Flow
+## Process Flow
 
 ```
-┌──────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
-│                      │     │                      │     │                      │
-│  Client              │     │  Server              │     │  Processing          │
-│                      │     │                      │     │                      │
-│  1. Select Files     │────►│  1. Receive Files    │────►│  1. Detect Format    │
-│  2. Upload           │     │  2. Store Files      │     │  2. Convert to JSONL │
-│  3. Monitor Progress │◄────│  3. Create Job       │     │  3. Extract Location │
-│  4. View Results     │     │  4. Return Job ID    │     │  4. Validate Data    │
-│  5. Download Output  │◄────│  5. Serve Results    │◄────│  5. Generate Output  │
-│                      │     │                      │     │                      │
-└──────────────────────┘     └──────────────────────┘     └──────────────────────┘
+┌────────┐     ┌────────────────┐     ┌─────────────┐     ┌────────────────┐
+│        │     │                │     │             │     │                │
+│ Client │─┬──►│ Upload Request │────►│ Create Job  │────►│ Job Processing │
+│        │ │   │                │     │             │     │                │
+└────────┘ │   └────────────────┘     └─────────────┘     └────────────────┘
+           │                                                       │
+           │   ┌────────────────┐     ┌─────────────┐             │
+           │   │                │     │             │             │
+           └──►│ Status Check   │◄────┤ Job Updates │◄────────────┘
+               │                │     │             │
+               └────────────────┘     └─────────────┘
+                        │
+                        ▼
+               ┌────────────────┐
+               │                │
+               │ Results        │
+               │                │
+               └────────────────┘
 ```
 
 ## API Endpoints
 
-FusionAgent exposes the following RESTful API endpoints:
+FusionFly exposes the following RESTful API endpoints:
 
-| Endpoint                 | Method | Description                                      |
-|--------------------------|--------|--------------------------------------------------|
-| `/api/files/upload`      | POST   | Upload GNSS and/or IMU files                     |
-| `/api/files/status/:id`  | GET    | Check processing status for a job                |
-| `/api/files/list`        | GET    | List all processed files                         |
-| `/api/files/download/:id`| GET    | Download a processed file                        |
-| `/api/files/clear-cache` | POST   | Clear all cached files                           |
-| `/api/health`            | GET    | Check API health                                 |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/files/upload` | POST | Upload GNSS and IMU files |
+| `/api/files/status/:jobId` | GET | Check processing status |
+| `/api/files/list` | GET | List all processed files |
+| `/api/files/download/:filename` | GET | Download a processed file |
+| `/api/files/clear-cache` | POST | Clear all cached files |
 
 ## GNSS+IMU Fusion with FGO
 
-FusionAgent uses Factor Graph Optimization (FGO) to fuse GNSS and IMU data. This approach:
+FusionFly uses Factor Graph Optimization (FGO) to fuse GNSS and IMU data. This approach:
 
 1. Creates a graph where nodes represent states (position, velocity, orientation)
-2. Adds edges representing constraints from sensor measurements
-3. Optimizes the graph to find the most likely trajectory
-4. Produces a consistent navigation solution robust to sensor errors
-
-Benefits of FGO:
-
-- Handles sensor outages and degraded signals
-- Provides accurate positioning in challenging environments
-- Combines complementary sensor characteristics:
-  - GNSS: Absolute positioning, drift-free
-  - IMU: High rate, orientation, robust to signal loss
+2. Adds edges representing sensor measurements and constraints
+3. Optimizes the graph to find the most likely trajectory that satisfies all constraints
+4. Handles sensor noise and occasional dropouts gracefully
 
 ## Getting Started
 
 ### Prerequisites
-
-- Node.js (v16+)
-- npm or yarn
+- Node.js 14.x or higher
 - Redis server
+- Modern web browser
 
 ### Installation
+1. Clone the repository: `git clone https://github.com/Thorkee/LLMFGO.git`
+2. Install dependencies: `npm run install:all`
+3. Configure environment variables in `.env` files
+4. Start the application: `npm run dev`
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/Thorkee/LLMFGO.git
-   cd LLMFGO
-   ```
-
-2. Install dependencies:
-   ```
-   npm run install:all
-   ```
-
-3. Set up environment:
-   ```
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
-
-4. Start the development servers:
-   ```
-   npm run dev
-   ```
-
-## Usage
-
+### Usage
 1. Navigate to `http://localhost:3000` in your browser
-2. Upload GNSS and/or IMU data files on the Upload page
-3. Monitor processing status
-4. View and download results from the Files page
+2. Upload GNSS/IMU data files in supported formats
+3. Monitor processing status in real-time
+4. View and download processing results
 
-## Development
-
-### Project Structure
-
+## Project Structure
 ```
-LLMFGO/
-├── frontend/           # React frontend
-│   ├── public/         # Static assets
-│   └── src/            # React components and logic
-│       ├── components/ # Reusable UI components
-│       └── pages/      # Main application pages
-├── backend/            # Express.js backend
-│   └── src/
-│       ├── controllers/# API controllers
-│       ├── services/   # Business logic
-│       ├── routes/     # API routes
-│       ├── models/     # Data models
-│       └── utils/      # Utility functions
-├── uploads/            # Uploaded and processed files
-└── test-files/         # Test data for development
+├── frontend/                # React frontend
+│   ├── public/              # Static assets
+│   └── src/                 # React source code
+├── backend/                 # Express.js backend
+│   ├── src/                 # TypeScript source files
+│   │   ├── controllers/     # Request handlers
+│   │   ├── routes/          # API routes
+│   │   ├── services/        # Business logic
+│   │   └── utils/           # Helper functions
+│   └── uploads/             # Uploaded file storage
+└── package.json             # Project configuration
 ```
 
 ## Roadmap
-
-- [x] Basic GNSS data processing (RINEX, NMEA, UBX)
-- [x] Multi-format conversion to standardized JSONL
-- [x] File upload and download functionality
-- [x] IMU data support
+- [ ] Support for more GNSS formats
+- [ ] Advanced visualization options
+- [ ] Batch processing mode
 - [ ] Complete GNSS+IMU fusion with FGO
-- [ ] Interactive trajectory visualization
-- [ ] Batch processing
-- [ ] User authentication and file management
-- [ ] Performance optimizations for large datasets
+- [ ] Performance optimizations
+- [ ] Docker containerization
 
 ## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT
 
 ## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request or open an Issue on GitHub.
-
-## Acknowledgments
-
-- Built with React, Express.js, and Redis
-- Uses Factor Graph Optimization techniques
-- Inspired by modern GNSS+IMU fusion research
+Contributions are welcome! Please feel free to submit a Pull Request.

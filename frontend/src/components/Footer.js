@@ -37,7 +37,7 @@ function Footer() {
               />
             </svg>
             <span className="text-sm text-gray-600 dark:text-gray-400">
-              Fusion<span className="text-primary-600">Agent</span> © {currentYear}
+              Fusion<span className="text-primary-600">Fly</span> © {currentYear}
             </span>
           </div>
           
@@ -53,7 +53,7 @@ function Footer() {
               </svg>
             </a>
             <a 
-              href="https://twitter.com/fusionagent" 
+              href="https://twitter.com/fusionfly" 
               target="_blank" 
               rel="noopener noreferrer"
               className="text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 transition-colors"

@@ -369,7 +369,7 @@ function FileUpload() {
         <h3 className="text-lg font-medium mb-3">Processing Information</h3>
         <div className="text-sm text-gray-600 space-y-2">
           <p>
-            <span className="font-medium">FusionAgent</span> processes both GNSS and IMU data to provide accurate positioning using Factor Graph Optimization.
+            <span className="font-medium">FusionFly</span> processes both GNSS and IMU data to provide accurate positioning using Factor Graph Optimization.
           </p>
           <p><strong>For best results:</strong></p>
           <ul className="list-disc pl-5 space-y-1">
