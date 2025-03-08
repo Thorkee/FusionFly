@@ -119,7 +119,7 @@ FusionFly uses Factor Graph Optimization (FGO) to fuse GNSS and IMU data. This a
 - Modern web browser
 
 ### Installation
-1. Clone the repository: `git clone https://github.com/Thorkee/LLMFGO.git`
+1. Clone the repository: `git clone https://github.com/Thorkee/FusionFly.git`
 2. Install dependencies: `npm run install:all`
 3. Configure environment variables in `.env` files
 4. Start the application: `npm run dev`

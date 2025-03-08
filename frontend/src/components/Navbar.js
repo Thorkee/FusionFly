@@ -43,7 +43,7 @@ function Navbar() {
                 />
               </svg>
               <span className="text-xl font-semibold text-gray-900">
-                Fusion<span className="text-primary-600">Agent</span>
+                Fusion<span className="text-primary-600">Fly</span>
               </span>
             </Link>
           </div>
@@ -118,7 +118,7 @@ function Navbar() {
             
             {/* GitHub Link */}
             <a
-              href="https://github.com/Thorkee/LLMFGO"
+              href="https://github.com/Thorkee/FusionFly"
               target="_blank"
               rel="noopener noreferrer"
               className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
@@ -171,7 +171,7 @@ function Navbar() {
             Files
           </Link>
           <a
-            href="https://github.com/Thorkee/LLMFGO"
+            href="https://github.com/Thorkee/FusionFly"
             target="_blank"
             rel="noopener noreferrer"
             className="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100"
