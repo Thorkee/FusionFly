@@ -9,48 +9,55 @@ dotenv.config();
 // Connection string from environment variable
 const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
 
-// Use local fallback if no connection string or using development storage
-const useLocalFallback = !connectionString || connectionString === 'UseDevelopmentStorage=true';
+// Never use local fallback - always require Azure services
+const useLocalFallback = false;
+
+// Display a clear error if connection string is missing
+if (!connectionString || connectionString === 'UseDevelopmentStorage=true') {
+  console.error('ERROR: Azure Storage connection string is required but missing or invalid.');
+  console.error('Please set AZURE_STORAGE_CONNECTION_STRING environment variable to a valid connection string.');
+}
 
 // Container names from environment variables (with defaults)
 const uploadsContainer = process.env.AZURE_STORAGE_CONTAINER_UPLOADS || 'uploads';
 const processedContainer = process.env.AZURE_STORAGE_CONTAINER_PROCESSED || 'processed';
 const resultsContainer = process.env.AZURE_STORAGE_CONTAINER_RESULTS || 'results';
 
-// Local fallback paths
+// Export container names for use in other services
+export const containers = {
+  uploads: uploadsContainer,
+  processed: processedContainer,
+  results: resultsContainer
+};
+
+// Local fallback paths (only used in case of emergency when Azure is down)
 const uploadsFallbackDir = path.join(__dirname, '../../uploads');
 const processedFallbackDir = path.join(__dirname, '../../processed');
 const resultsFallbackDir = path.join(__dirname, '../../results');
 
-// Create local fallback directories if they don't exist
-if (useLocalFallback) {
-  fs.mkdirSync(uploadsFallbackDir, { recursive: true });
-  fs.mkdirSync(processedFallbackDir, { recursive: true });
-  fs.mkdirSync(resultsFallbackDir, { recursive: true });
-  console.log('Using local filesystem fallback for blob storage');
-}
-
-// Create BlobServiceClient only if we're not using local fallback
+// Create BlobServiceClient
 let blobServiceClient: BlobServiceClient | null = null;
-if (!useLocalFallback && connectionString) {
+if (connectionString) {
   try {
     blobServiceClient = BlobServiceClient.fromConnectionString(connectionString);
+    console.log('Azure Blob Storage client initialized successfully');
   } catch (error) {
     console.error('Error creating BlobServiceClient:', error);
-    console.log('Falling back to local filesystem for storage');
+    throw new Error('Failed to initialize Azure Blob Storage client. Application cannot continue without Azure services.');
   }
+} else {
+  throw new Error('Azure Storage connection string is required but missing.');
 }
 
 /**
  * Initialize blob storage containers
  */
 export async function initializeStorage(): Promise<void> {
-  if (useLocalFallback || !blobServiceClient) {
-    console.log('Using local filesystem for storage (development mode)');
-    return;
-  }
-  
   console.log('Initializing Azure Blob Storage...');
+  
+  if (!blobServiceClient) {
+    throw new Error('BlobServiceClient is not initialized. Cannot continue.');
+  }
   
   try {
     // Create containers if they don't exist
@@ -70,8 +77,7 @@ export async function initializeStorage(): Promise<void> {
  */
 async function createContainerIfNotExists(containerName: string): Promise<ContainerClient | null> {
   if (!blobServiceClient) {
-    console.log(`Using local fallback for container: ${containerName}`);
-    return null;
+    throw new Error('BlobServiceClient is not initialized');
   }
 
   const containerClient = blobServiceClient.getContainerClient(containerName);
@@ -89,29 +95,15 @@ async function createContainerIfNotExists(containerName: string): Promise<Contai
 }
 
 /**
- * Upload a file to Azure Blob Storage or local filesystem
+ * Upload a file to Azure Blob Storage
  */
 export async function uploadFile(
   filePath: string, 
   blobName: string, 
   containerName: string = uploadsContainer
 ): Promise<string> {
-  // Use local fallback if Azure Storage is not available
-  if (useLocalFallback || !blobServiceClient) {
-    const localDir = getLocalPathForContainer(containerName);
-    const destinationPath = path.join(localDir, blobName);
-    
-    // Create directory if it doesn't exist
-    const dir = path.dirname(destinationPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
-    // Copy the file
-    fs.copyFileSync(filePath, destinationPath);
-    console.log(`File ${blobName} copied to local path: ${destinationPath}`);
-    
-    return `file://${destinationPath}`;
+  if (!blobServiceClient) {
+    throw new Error('BlobServiceClient is not initialized. Cannot upload file.');
   }
 
   try {
@@ -144,29 +136,15 @@ export async function uploadFile(
 }
 
 /**
- * Upload file content (string or buffer) to Azure Blob Storage or local filesystem
+ * Upload file content (string or buffer) to Azure Blob Storage
  */
 export async function uploadContent(
   content: string | Buffer, 
   blobName: string, 
   containerName: string = processedContainer
 ): Promise<string> {
-  // Use local fallback if Azure Storage is not available
-  if (useLocalFallback || !blobServiceClient) {
-    const localDir = getLocalPathForContainer(containerName);
-    const destinationPath = path.join(localDir, blobName);
-    
-    // Create directory if it doesn't exist
-    const dir = path.dirname(destinationPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
-    // Write the content
-    fs.writeFileSync(destinationPath, content);
-    console.log(`Content written to local path: ${destinationPath}`);
-    
-    return `file://${destinationPath}`;
+  if (!blobServiceClient) {
+    throw new Error('BlobServiceClient is not initialized. Cannot upload content.');
   }
 
   try {
@@ -192,33 +170,15 @@ export async function uploadContent(
 }
 
 /**
- * Download a file from Azure Blob Storage or local filesystem
+ * Download a file from Azure Blob Storage
  */
 export async function downloadFile(
   blobName: string, 
   destinationPath: string, 
   containerName: string = processedContainer
 ): Promise<void> {
-  // Use local fallback if Azure Storage is not available
-  if (useLocalFallback || !blobServiceClient) {
-    const localDir = getLocalPathForContainer(containerName);
-    const sourcePath = path.join(localDir, blobName);
-    
-    // Check if file exists
-    if (!fs.existsSync(sourcePath)) {
-      throw new Error(`File ${blobName} not found in local fallback`);
-    }
-    
-    // Create directory if it doesn't exist
-    const dir = path.dirname(destinationPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
-    // Copy the file
-    fs.copyFileSync(sourcePath, destinationPath);
-    console.log(`File ${blobName} copied from local path to ${destinationPath}`);
-    return;
+  if (!blobServiceClient) {
+    throw new Error('BlobServiceClient is not initialized. Cannot download file.');
   }
 
   try {

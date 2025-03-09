@@ -7,14 +7,25 @@ import readline from 'readline';
 import { promisify } from 'util';
 import * as nmeaSimple from 'nmea-simple';
 import { UBXParser } from '@csllc/ubx-parser';
+import { readFile as fsReadFile } from 'fs/promises';
+import * as blobStorageService from './blobStorageService';
+import { aiAssistedConversion } from './aiService';
 
 // Load environment variables
 dotenv.config();
 
+// Get container names from environment variables
+const processedContainer = process.env.AZURE_STORAGE_CONTAINER_PROCESSED || 'processed';
+const uploadsContainer = process.env.AZURE_STORAGE_CONTAINER_UPLOADS || 'uploads';
+const resultsContainer = process.env.AZURE_STORAGE_CONTAINER_RESULTS || 'results';
+
+// Flag to force AI-based conversion (for testing/development)
+const FORCE_AI_CONVERSION = process.env.FORCE_AI_CONVERSION === 'true';
+
 // Create a Bull queue for file processing
 const fileProcessingQueue = new Queue('file-processing', {
   redis: {
-    port: parseInt(process.env.REDIS_PORT || '6383'),
+    port: parseInt(process.env.REDIS_PORT || '6379'),
     host: process.env.REDIS_HOST || 'localhost',
   }
 });
@@ -24,23 +35,44 @@ interface ProcessFile {
   originalname: string;
   filename: string;
   path: string;
+  url?: string; // Add optional url field for Azure Blob Storage
 }
 
+// Define data structure for file processing
 interface ProcessFilesData {
   gnssFile?: ProcessFile;
   imuFile?: ProcessFile;
 }
 
-// Update the queue processor to handle multiple files
+// Define result interface
+interface ProcessFilesResult {
+  message: string;
+  files: {
+    gnss?: any;
+    imu?: any;
+  };
+  gnssValidation?: {
+    valid: boolean;
+    issueCount: number;
+  };
+  fusion?: {
+    status: string;
+    message: string;
+  };
+}
+
+// Process files job handler
 fileProcessingQueue.process(async (job) => {
-  const { gnssFile, imuFile } = job.data;
+  const data = job.data as ProcessFilesData;
+  const { gnssFile, imuFile } = data;
   
   try {
-    // Update job progress
     await job.progress(10);
+    await job.update({ stage: 'uploading', message: 'Starting processing...' });
+    console.log(`Starting to process files: GNSS=${gnssFile?.filename}, IMU=${imuFile?.filename}`);
     
-    const result: any = {
-      status: 'completed',
+    // Initialize result object
+    const result: ProcessFilesResult = {
       message: 'File processing completed successfully',
       files: {}
     };
@@ -56,39 +88,144 @@ fileProcessingQueue.process(async (job) => {
         const baseName = path.basename(filePath, fileExtension);
         jsonlFilePath = path.join(path.dirname(filePath), `${baseName}.jsonl`);
         
-        // Perform real conversion based on file extension
-        await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+        await job.update({ 
+          stage: 'first_conversion', 
+          message: FORCE_AI_CONVERSION 
+            ? 'Converting GNSS file using AI-assisted conversion (FORCED)...' 
+            : 'Converting GNSS file to intermediate format...' 
+        });
+        
+        try {
+          // Attempt standard conversion based on file extension
+          await job.update({ 
+            stage: 'first_conversion_standard', 
+            message: `Converting GNSS file using standard processor for ${fileExtension} format...` 
+          });
+          
+          // Perform real conversion based on file extension
+          await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+        } catch (conversionError) {
+          // If standard conversion fails, try AI-assisted conversion
+          await job.update({ 
+            stage: 'first_conversion_ai', 
+            message: 'Standard conversion failed, attempting AI-assisted conversion...',
+            details: { error: conversionError instanceof Error ? conversionError.message : String(conversionError) }
+          });
+          
+          // The convertToJsonl function will handle AI fallback internally
+          await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+        }
+        
+        // Upload the converted JSONL file to processed container
+        await job.update({ stage: 'uploading_converted', message: 'Uploading converted GNSS file...' });
+        const jsonlBlobName = path.basename(jsonlFilePath);
+        const jsonlUrl = await blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer);
+        console.log(`Uploaded converted JSONL file to processed container: ${jsonlUrl}`);
       }
       await job.progress(40);
       
       // Step 2: Extract location data
+      await job.update({ stage: 'extracting_location', message: 'Extracting location data from GNSS file...' });
       const baseName = path.basename(jsonlFilePath, '.jsonl');
       const locationFilePath = path.join(path.dirname(jsonlFilePath), `${baseName}.location.jsonl`);
       
       // Extract location data from JSONL
       await extractLocationData(jsonlFilePath, locationFilePath);
+      
+      // Upload the location data file to processed container
+      await job.update({ stage: 'uploading_location', message: 'Uploading extracted location data...' });
+      const locationBlobName = path.basename(locationFilePath);
+      const locationUrl = await blobStorageService.uploadFile(locationFilePath, locationBlobName, processedContainer);
+      console.log(`Uploaded location data file to processed container: ${locationUrl}`);
+      
       await job.progress(60);
       
       // Step 3: Validate the extracted location data
+      await job.update({ stage: 'validating', message: 'Validating location data...' });
       const validationResult = await validateLocationData(locationFilePath);
       
       // Create validation report if there are issues
       let validationReportPath = null;
+      let validationUrl = null;
       if (!validationResult.valid && validationResult.issues.length > 0) {
+        await job.update({ 
+          stage: 'validation_report', 
+          message: `Creating validation report (${validationResult.issues.length} issues found)...` 
+        });
         validationReportPath = path.join(path.dirname(locationFilePath), `${baseName}.validation.json`);
         fs.writeFileSync(validationReportPath, JSON.stringify({
           timestamp: new Date().toISOString(),
           valid: validationResult.valid,
           issues: validationResult.issues
         }, null, 2));
+        
+        // Upload validation report to processed container
+        const validationBlobName = path.basename(validationReportPath);
+        validationUrl = await blobStorageService.uploadFile(validationReportPath, validationBlobName, processedContainer);
+        console.log(`Uploaded validation report to processed container: ${validationUrl}`);
       }
       
-      result.files.gnss = {
-        original: path.basename(filePath),
-        jsonl: path.basename(jsonlFilePath),
-        location: path.basename(locationFilePath),
-        validation: validationReportPath ? path.basename(validationReportPath) : null
-      };
+      // Step 4: AI-assisted schema conversion for GNSS data
+      await job.update({ stage: 'second_conversion', message: 'Converting to structured schema format...' });
+      const schemaConversionPath = path.join(path.dirname(locationFilePath), `${baseName}.structured.json`);
+      
+      try {
+        await job.update({ 
+          stage: 'second_conversion_ai', 
+          message: 'Generating AI-assisted conversion code for structured schema...' 
+        });
+        
+        const gnssConversionResult = await aiAssistedConversion(locationFilePath, schemaConversionPath, 'gnss');
+        
+        if (gnssConversionResult.success && gnssConversionResult.output_path) {
+          // Upload the structured schema file to processed container
+          await job.update({ 
+            stage: 'second_conversion_complete', 
+            message: 'Schema conversion successful, uploading structured data...' 
+          });
+          
+          const schemaConversionBlobName = path.basename(gnssConversionResult.output_path);
+          const schemaConversionUrl = await blobStorageService.uploadFile(gnssConversionResult.output_path, schemaConversionBlobName, processedContainer);
+          console.log(`Uploaded GNSS structured schema file to processed container: ${schemaConversionUrl}`);
+          
+          result.files.gnss = {
+            original: path.basename(filePath),
+            jsonl: path.basename(jsonlFilePath),
+            location: path.basename(locationFilePath),
+            validation: validationReportPath ? path.basename(validationReportPath) : null,
+            structured: schemaConversionBlobName
+          };
+        } else {
+          await job.update({ 
+            stage: 'second_conversion_failed', 
+            message: 'Schema conversion failed, continuing with basic data...',
+            details: { error: gnssConversionResult.error }
+          });
+          
+          console.error(`GNSS schema conversion failed: ${gnssConversionResult.error}`);
+          result.files.gnss = {
+            original: path.basename(filePath),
+            jsonl: path.basename(jsonlFilePath),
+            location: path.basename(locationFilePath),
+            validation: validationReportPath ? path.basename(validationReportPath) : null,
+            structuredError: gnssConversionResult.error
+          };
+        }
+      } catch (schemaError) {
+        await job.update({ 
+          stage: 'second_conversion_error', 
+          message: 'Schema conversion encountered an error, continuing with basic data...',
+          details: { error: schemaError instanceof Error ? schemaError.message : String(schemaError) }
+        });
+        
+        result.files.gnss = {
+          original: path.basename(filePath),
+          jsonl: path.basename(jsonlFilePath),
+          location: path.basename(locationFilePath),
+          validation: validationReportPath ? path.basename(validationReportPath) : null,
+          structuredError: schemaError instanceof Error ? schemaError.message : String(schemaError)
+        };
+      }
       
       result.gnssValidation = {
         valid: validationResult.valid,
@@ -107,19 +244,104 @@ fileProcessingQueue.process(async (job) => {
         const baseName = path.basename(filePath, fileExtension);
         jsonlFilePath = path.join(path.dirname(filePath), `${baseName}.jsonl`);
         
-        // Perform real conversion based on file extension
-        await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+        await job.update({ 
+          stage: 'first_conversion_imu', 
+          message: FORCE_AI_CONVERSION 
+            ? 'Converting IMU file using AI-assisted conversion (FORCED)...' 
+            : 'Converting IMU file to intermediate format...' 
+        });
+        
+        try {
+          // Attempt standard conversion based on file extension
+          await job.update({ 
+            stage: 'first_conversion_standard_imu', 
+            message: `Converting IMU file using standard processor for ${fileExtension} format...` 
+          });
+          
+          // Perform real conversion based on file extension
+          await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+        } catch (conversionError) {
+          // If standard conversion fails, try AI-assisted conversion
+          await job.update({ 
+            stage: 'first_conversion_ai_imu', 
+            message: 'Standard conversion failed, attempting AI-assisted conversion for IMU data...',
+            details: { error: conversionError instanceof Error ? conversionError.message : String(conversionError) }
+          });
+          
+          // The convertToJsonl function will handle AI fallback internally
+          await convertToJsonl(filePath, jsonlFilePath, fileExtension);
+        }
+        
+        // Upload the converted JSONL file to processed container
+        await job.update({ stage: 'uploading_converted_imu', message: 'Uploading converted IMU file...' });
+        const jsonlBlobName = path.basename(jsonlFilePath);
+        const jsonlUrl = await blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer);
+        console.log(`Uploaded converted IMU file to processed container: ${jsonlUrl}`);
       }
       await job.progress(80);
       
-      result.files.imu = {
-        original: path.basename(filePath),
-        jsonl: path.basename(jsonlFilePath)
-      };
+      // Step 2: AI-assisted schema conversion for IMU data
+      await job.update({ stage: 'second_conversion_imu', message: 'Converting IMU data to structured schema format...' });
+      const baseName = path.basename(jsonlFilePath, '.jsonl');
+      const schemaConversionPath = path.join(path.dirname(jsonlFilePath), `${baseName}.structured.json`);
+      
+      try {
+        await job.update({ 
+          stage: 'second_conversion_ai_imu', 
+          message: 'Generating AI-assisted conversion code for IMU structured schema...' 
+        });
+        
+        const imuConversionResult = await aiAssistedConversion(jsonlFilePath, schemaConversionPath, 'imu');
+        
+        if (imuConversionResult.success && imuConversionResult.output_path) {
+          // Upload the structured schema file to processed container
+          await job.update({ 
+            stage: 'second_conversion_complete_imu', 
+            message: 'IMU schema conversion successful, uploading structured data...' 
+          });
+          
+          const schemaConversionBlobName = path.basename(imuConversionResult.output_path);
+          const schemaConversionUrl = await blobStorageService.uploadFile(imuConversionResult.output_path, schemaConversionBlobName, processedContainer);
+          console.log(`Uploaded IMU structured schema file to processed container: ${schemaConversionUrl}`);
+          
+          result.files.imu = {
+            original: path.basename(filePath),
+            jsonl: path.basename(jsonlFilePath),
+            structured: schemaConversionBlobName
+          };
+        } else {
+          await job.update({ 
+            stage: 'second_conversion_failed_imu', 
+            message: 'IMU schema conversion failed, continuing with basic data...',
+            details: { error: imuConversionResult.error }
+          });
+          
+          console.error(`IMU schema conversion failed: ${imuConversionResult.error}`);
+          result.files.imu = {
+            original: path.basename(filePath),
+            jsonl: path.basename(jsonlFilePath),
+            structuredError: imuConversionResult.error
+          };
+        }
+      } catch (schemaError) {
+        await job.update({ 
+          stage: 'second_conversion_error_imu', 
+          message: 'IMU schema conversion encountered an error, continuing with basic data...',
+          details: { error: schemaError instanceof Error ? schemaError.message : String(schemaError) }
+        });
+        
+        result.files.imu = {
+          original: path.basename(filePath),
+          jsonl: path.basename(jsonlFilePath),
+          structuredError: schemaError instanceof Error ? schemaError.message : String(schemaError)
+        };
+      }
     }
     
     // If both GNSS and IMU data are provided, perform data fusion
     if (gnssFile && imuFile) {
+      await job.update({ stage: 'fusion', message: 'Preparing for GNSS+IMU data fusion...' });
+      
       // Future enhancement: Implement GNSS+IMU data fusion with FGO
       result.fusion = {
         status: 'Planned for future release',
@@ -128,11 +350,13 @@ fileProcessingQueue.process(async (job) => {
     }
     
     await job.progress(100);
+    await job.update({ stage: 'complete', message: 'Processing completed successfully!' });
     return result;
     
   } catch (error: unknown) {
     console.error('Error processing files:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await job.update({ stage: 'error', message: `Processing failed: ${errorMessage}` });
     throw new Error(`Failed to process files: ${errorMessage}`);
   }
 });
@@ -140,34 +364,82 @@ fileProcessingQueue.process(async (job) => {
 // Convert various file formats to JSONL
 async function convertToJsonl(inputPath: string, outputPath: string, fileExtension: string): Promise<void> {
   console.log(`Converting ${inputPath} to JSONL format`);
+  console.log(`Output path: ${outputPath}`);
+  console.log(`File extension: ${fileExtension}`);
   
-  switch (fileExtension) {
-    case '.obs':
-    case '.rnx':
-    case '.21o':
-    case '.22o':
-    case '.23o':
-      await convertRinexToJsonl(inputPath, outputPath);
-      break;
-    case '.nmea':
-    case '.gps':
-    case '.txt':
-      // Try to detect format based on content
-      await detectAndConvertToJsonl(inputPath, outputPath);
-      break;
-    case '.json':
-      await convertJsonToJsonl(inputPath, outputPath);
-      break;
-    case '.ubx':
-      await convertUbxToJsonl(inputPath, outputPath);
-      break;
-    case '.csv':
-      // For CSV files, try to detect if it's a GPS/GNSS format
-      await detectAndConvertToJsonl(inputPath, outputPath);
-      break;
-    default:
-      // For unsupported formats, create a basic conversion with file content
-      await basicFileToJsonl(inputPath, outputPath);
+  // Determine if this is likely GNSS or IMU data based on file name or extension
+  const fileName = path.basename(inputPath).toLowerCase();
+  let dataType = 'unknown';
+  
+  // Simple heuristic - can be improved with more complex detection
+  if (fileName.includes('gnss') || fileName.includes('gps') || 
+      fileName.includes('rinex') || fileName.includes('nmea') ||
+      fileExtension === '.obs' || fileExtension === '.rnx' || 
+      fileExtension === '.nmea' || fileExtension === '.gps') {
+    dataType = 'gnss';
+  } else if (fileName.includes('imu') || fileName.includes('ins') || 
+            fileName.includes('accel') || fileName.includes('gyro')) {
+    dataType = 'imu';
+  }
+  
+  console.log(`Detected data type: ${dataType}`);
+  
+  // Use AI-assisted conversion first
+  console.log(`Using AI-assisted conversion for ${dataType} data`);
+  try {
+    console.log(`Calling aiAssistedConversion with dataType=${dataType}, inputPath=${inputPath}`);
+    const conversionResult = await aiAssistedConversion(inputPath, outputPath, dataType);
+    console.log(`AI-assisted conversion result:`, conversionResult);
+    
+    if (conversionResult.success && conversionResult.output_path) {
+      // If AI conversion succeeded, copy the result to the expected output path
+      console.log(`AI conversion succeeded, copying from ${conversionResult.output_path} to ${outputPath}`);
+      fs.copyFileSync(conversionResult.output_path, outputPath);
+      console.log(`AI-assisted conversion successfully converted ${inputPath} to JSONL`);
+      return;
+    } else {
+      console.error(`AI-assisted conversion failed: ${conversionResult.error}`);
+      // Don't throw an error here, just log it and continue to fallback
+    }
+  } catch (error) {
+    console.error(`Error during AI conversion:`, error);
+    // Don't throw an error here, just log it and continue to fallback
+  }
+  
+  // Only use standard conversion as fallback
+  console.log("AI-assisted conversion failed, falling back to standard conversion methods");
+  try {
+    // Fall back to standard conversion based on file extension
+    switch (fileExtension) {
+      case '.obs':
+      case '.rnx':
+      case '.21o':
+      case '.22o':
+      case '.23o':
+        await convertRinexToJsonl(inputPath, outputPath);
+        break;
+      case '.nmea':
+      case '.gps':
+      case '.txt':
+        await convertNmeaToJsonl(inputPath, outputPath);
+        break;
+      case '.ubx':
+        await convertUbxToJsonl(inputPath, outputPath);
+        break;
+      case '.json':
+        await convertJsonToJsonl(inputPath, outputPath);
+        break;
+      case '.csv':
+        await basicFileToJsonl(inputPath, outputPath);
+        break;
+      default:
+        // For unknown formats, try format detection
+        console.log(`No predefined converter for ${fileExtension}, attempting format detection...`);
+        await detectAndConvertToJsonl(inputPath, outputPath);
+    }
+  } catch (error) {
+    console.error(`Error in standard conversion process: ${error}`);
+    throw new Error(`All conversion methods failed for ${inputPath}: ${error}`);
   }
 }
 
@@ -874,19 +1146,33 @@ async function aiAssistedParsing(inputPath: string, outputPath: string, format: 
   console.log(`Attempting AI-assisted parsing for ${format} format`);
   
   try {
-    // This is a placeholder for AI-assisted parsing
-    // In a real implementation, this would call an AI service to analyze the file
-    // and generate appropriate parsing logic
+    // Determine if this is likely GNSS or IMU data
+    const fileName = path.basename(inputPath).toLowerCase();
+    let dataType = 'unknown';
     
-    // For now, we'll just return false to indicate that AI parsing was not successful
-    // and the system should fall back to basic parsing
+    // Simple heuristic - can be improved
+    if (format === 'RINEX' || format === 'NMEA' || format === 'GPS') {
+      dataType = 'gnss';
+    } else if (format === 'IMU' || format === 'INS') {
+      dataType = 'imu';
+    } else if (fileName.includes('gnss') || fileName.includes('gps')) {
+      dataType = 'gnss';
+    } else if (fileName.includes('imu') || fileName.includes('ins')) {
+      dataType = 'imu';
+    }
     
-    // In a real implementation, this function would:
-    // 1. Send a sample of the file to an AI service
-    // 2. Get back parsing instructions or a parsing function
-    // 3. Apply the parsing logic to convert the file to JSONL
-    // 4. Return true if successful
+    // Integrate with our new aiService, specifying this is a raw file (true as third parameter)
+    const conversionResult = await aiAssistedConversion(inputPath, outputPath, dataType);
     
+    if (conversionResult.success && conversionResult.output_path) {
+      // If AI conversion succeeded, copy the result to the expected output path
+      fs.copyFileSync(conversionResult.output_path, outputPath);
+      return true;
+    }
+    
+    // If AI conversion failed, return false to fallback to basic parsing
+    console.log(`AI-assisted parsing for ${format} was not successful, falling back to basic parsing`);
+    console.log(`Error: ${conversionResult.error}`);
     return false;
   } catch (error) {
     console.error(`Error in AI-assisted parsing for ${format}:`, error);
@@ -1050,10 +1336,42 @@ export const fileProcessingService = {
     const result = job.returnvalue;
     const failReason = job.failedReason;
     
+    // Get detailed status info if available
+    let stage = 'processing';
+    let message = 'Processing file(s)...';
+    let details = null;
+    
+    if (job.data && job.data.stage) {
+      stage = job.data.stage;
+    }
+    
+    if (job.data && job.data.message) {
+      message = job.data.message;
+    }
+    
+    if (job.data && job.data.details) {
+      details = job.data.details;
+    }
+    
+    // If job is completed but we have no custom message
+    if (state === 'completed' && stage === 'processing') {
+      stage = 'complete';
+      message = 'Processing complete! Your files are ready.';
+    }
+    
+    // If job failed but we have no custom message
+    if (state === 'failed' && stage === 'processing') {
+      stage = 'error';
+      message = failReason || 'Processing failed due to an unknown error.';
+    }
+    
     return {
       id: job.id,
       state,
       progress,
+      stage,
+      message,
+      details,
       result,
       failReason,
       createdAt: job.timestamp

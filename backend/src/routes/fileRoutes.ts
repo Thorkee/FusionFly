@@ -3,6 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { fileController } from '../controllers/fileController';
+import { authenticate, authorizeAdmin } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
@@ -33,18 +34,22 @@ const fileFilter = (req: express.Request, file: Express.Multer.File, cb: multer.
 const upload = multer({ 
   storage, 
   fileFilter,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
+  limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit (increased from 100MB)
 });
 
-// Routes
+// Public routes
+router.get('/download/:filename', fileController.downloadFile); // Allow public downloads if needed
+
+// Temporarily make routes public for testing
 router.post('/upload', upload.fields([
   { name: 'gnssFile', maxCount: 1 },
   { name: 'imuFile', maxCount: 1 }
 ]), fileController.uploadFile);
 
 router.get('/status/:id', fileController.getProcessingStatus);
-router.get('/download/:filename', fileController.downloadFile);
 router.get('/list', fileController.listFiles);
-router.post('/clear-cache', fileController.clearCache);
+
+// Admin-only routes
+router.post('/clear-cache', authenticate, authorizeAdmin, fileController.clearCache);
 
 export { router as fileRoutes }; 

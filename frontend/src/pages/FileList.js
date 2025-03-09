@@ -22,8 +22,17 @@ function FileList() {
       const groupedFiles = {};
       
       response.data.forEach(file => {
+        // Handle both Azure Blob Storage (name) and local filesystem (filename) formats
+        const fileName = file.filename || file.name || '';
+        
+        // Skip if no valid filename could be found
+        if (!fileName) {
+          console.warn('File without name or filename property:', file);
+          return;
+        }
+        
         // Get base name without extension
-        const baseName = file.filename.split('.')[0];
+        const baseName = fileName.split('.')[0];
         
         if (!groupedFiles[baseName]) {
           groupedFiles[baseName] = {
@@ -32,7 +41,15 @@ function FileList() {
           };
         }
         
-        groupedFiles[baseName].files.push(file);
+        // Normalize file object structure
+        const normalizedFile = {
+          ...file,
+          filename: fileName, // Ensure filename property exists
+          size: file.size || (file.properties?.contentLength || 0),
+          createdAt: file.createdAt || file.properties?.createdOn || new Date()
+        };
+        
+        groupedFiles[baseName].files.push(normalizedFile);
       });
       
       // Convert grouped object to array and sort by creation date (most recent first)
@@ -54,36 +71,81 @@ function FileList() {
   const clearCache = async () => {
     try {
       setClearingCache(true);
-      await axios.post('/api/files/clear-cache');
-      setCacheCleared(true);
-      setTimeout(() => setCacheCleared(false), 3000); // Reset message after 3 seconds
+      setError(null);
       
-      // Refresh files list
+      const response = await axios.post('/api/files/clear-cache');
+      
+      // Handle the response
+      if (response.status === 207) {
+        // Partial success
+        setError(`${response.data.message} Some files could not be deleted.`);
+      } else {
+        // Full success
+        setCacheCleared(true);
+        setTimeout(() => setCacheCleared(false), 3000); // Reset message after 3 seconds
+      }
+      
+      // Refresh files list regardless of full or partial success
       fetchFiles();
       setClearingCache(false);
     } catch (err) {
-      setError('Error clearing cache: ' + (err.response?.data?.error || err.message));
+      console.error('Error clearing cache:', err);
+      const errorMsg = err.response?.data?.error || err.message || 'Failed to clear cache';
+      setError(`Error clearing cache: ${errorMsg}`);
       setClearingCache(false);
     }
   };
 
-  const handleDownload = async (filename) => {
+  const handleDownload = async (file) => {
     try {
-      // Create a direct link to the file
+      // Get the filename (either filename property or name property)
+      const filename = file.filename || file.name;
+      
+      if (!filename) {
+        throw new Error('File has no name or filename property');
+      }
+      
+      console.log(`Attempting to download file: ${filename}`);
+      
+      // Create a download URL and use fetch to attempt the download
       const downloadUrl = `/api/files/download/${filename}`;
+      
+      // Use fetch with error handling
+      const response = await fetch(downloadUrl);
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error(`File "${filename}" is not available on the server.`);
+        } else {
+          throw new Error(`Error downloading file: ${response.statusText}`);
+        }
+      }
+      
+      // Get the blob from the response
+      const blob = await response.blob();
+      
+      // Create a URL for the blob
+      const url = window.URL.createObjectURL(blob);
       
       // Create a temporary anchor element to trigger the download
       const link = document.createElement('a');
-      link.href = downloadUrl;
+      link.href = url;
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
       
       // Clean up
       document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Error downloading file:', err);
-      setError('Error downloading file: ' + (err.response?.data?.error || err.message));
+      const errorMsg = err.message || 'File not available. The file may have been deleted or not properly processed.';
+      setError(errorMsg);
+      
+      // Clear error after 5 seconds
+      setTimeout(() => {
+        setError(null);
+      }, 5000);
     }
   };
 
@@ -100,6 +162,8 @@ function FileList() {
   };
 
   const getFileIcon = (filename) => {
+    if (!filename) return null;
+    
     const extension = filename.split('.').pop().toLowerCase();
     
     if (['nmea', 'txt', 'csv'].includes(extension)) {
@@ -124,26 +188,39 @@ function FileList() {
   };
 
   const handleFileClick = (fileGroup) => {
-    setSelectedFile(selectedFile === fileGroup.id ? null : fileGroup.id);
+    if (selectedFile === fileGroup.id) {
+      setSelectedFile(null);
+    } else {
+      setSelectedFile(fileGroup.id);
+    }
   };
 
   const getFileTypeLabel = (filename) => {
+    if (!filename) return "Unknown file type";
+    
     const extension = filename.split('.').pop().toLowerCase();
     
-    if (['nmea', 'txt'].includes(extension)) {
-      return 'NMEA File';
-    } else if (['obs', 'rnx', '21o', '22o'].includes(extension)) {
-      return 'RINEX File';
-    } else if (extension === 'ubx') {
-      return 'UBX Binary';
-    } else if (extension === 'csv') {
-      return 'CSV Data';
-    } else if (['json', 'jsonl'].includes(extension)) {
-      return 'JSON Data';
-    } else if (extension === 'imu') {
-      return 'IMU Data';
-    } else {
-      return 'Data File';
+    switch (extension) {
+      case 'nmea':
+        return 'NMEA Navigation Data';
+      case 'jsonl':
+        return 'JSON Lines Data';
+      case 'json':
+        return 'JSON Data';
+      case 'csv':
+        return 'CSV Data';
+      case 'txt':
+        return 'Text File';
+      case 'obs':
+      case 'rnx':
+      case '21o':
+      case '22o':
+      case '23o':
+        return 'RINEX Observation Data';
+      case 'location':
+        return 'Location Data';
+      default:
+        return `${extension.toUpperCase()} File`;
     }
   };
 
@@ -257,7 +334,7 @@ function FileList() {
                               <button 
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleDownload(file.filename);
+                                  handleDownload(file);
                                 }}
                                 className="inline-flex items-center px-2.5 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
                               >

@@ -56,45 +56,165 @@ az webapp create --name $app_name --resource-group $resource_group --plan $plan_
 
 # Set environment variables from .env file
 echo "Setting environment variables..."
-az webapp config appsettings set --name $app_name --resource-group $resource_group --settings "NODE_ENV=production" > /dev/null
+az webapp config appsettings set --name $app_name --resource-group $resource_group --settings "NODE_ENV=production" "PORT=8000" > /dev/null
 
-while IFS= read -r line; do
-    # Skip comments and empty lines
-    [[ $line =~ ^#.*$ ]] && continue
-    [[ -z $line ]] && continue
-    
-    # Extract key and value
-    key=$(echo $line | cut -d= -f1)
-    value=$(echo $line | cut -d= -f2-)
-    
-    # Set environment variable in Azure
-    echo "Setting $key"
-    az webapp config appsettings set --name $app_name --resource-group $resource_group --settings "$key=$value" > /dev/null
-done < backend/.env
+# Check if .env file exists
+if [ -f backend/.env ]; then
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ $line =~ ^#.*$ ]] && continue
+        [[ -z $line ]] && continue
+        
+        # Extract key and value
+        key=$(echo $line | cut -d= -f1)
+        value=$(echo $line | cut -d= -f2-)
+        
+        # Set environment variable in Azure
+        echo "Setting $key"
+        az webapp config appsettings set --name $app_name --resource-group $resource_group --settings "$key=$value" > /dev/null
+    done < backend/.env
+else
+    echo "Warning: .env file not found. Using default environment variables."
+    # Set fallback environment values
+    az webapp config appsettings set --name $app_name --resource-group $resource_group --settings "USE_LOCAL_DB_FALLBACK=true" > /dev/null
+fi
+
+# Build the backend
+echo "Building backend..."
+cd backend
+npm install
+npm run build
+if [ $? -ne 0 ]; then
+    echo "Backend build failed. Check for TypeScript errors."
+    exit 1
+fi
+cd ..
 
 # Build the frontend
 echo "Building frontend..."
 cd frontend
 npm install
 npm run build
+if [ $? -ne 0 ]; then
+    echo "Frontend build failed."
+    exit 1
+fi
 cd ..
 
 # Prepare deployment package
 echo "Preparing deployment package..."
 mkdir -p deployment
-cp -r backend/* deployment/
+mkdir -p deployment/uploads
+mkdir -p deployment/results
+mkdir -p deployment/localdb
+
+# Copy backend files
+cp -r backend/dist deployment/
+cp -r backend/*.js deployment/
+cp -r backend/package*.json deployment/
+
+# Add placeholder for users.json if needed
+if [ ! -f backend/localdb/users.json ]; then
+    echo '{"users":[]}' > deployment/localdb/users.json
+fi
+
+# Copy frontend build files
 mkdir -p deployment/frontend
-cp -r frontend/build deployment/frontend/
+cp -r frontend/build/* deployment/frontend/
+
+# Ensure web.config is properly included
+if [ ! -f backend/web.config ]; then
+    echo "web.config not found in backend. This is needed for Azure App Service."
+    echo "Creating default web.config..."
+    
+    cat > deployment/web.config << EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <system.webServer>
+    <webSocket enabled="false" />
+    <handlers>
+      <add name="iisnode" path="server.js" verb="*" modules="iisnode" />
+    </handlers>
+    <rewrite>
+      <rules>
+        <!-- First allow requests to the API directly -->
+        <rule name="API" patternSyntax="ECMAScript">
+          <match url="api/(.*)" />
+          <action type="Rewrite" url="server.js" />
+        </rule>
+        
+        <!-- For uploads and direct server access -->
+        <rule name="StaticContent">
+          <action type="Rewrite" url="{REQUEST_URI}" />
+          <conditions>
+            <add input="{REQUEST_FILENAME}" matchType="IsFile" pattern="" />
+          </conditions>
+        </rule>
+
+        <!-- All other requests go to Node.js server -->
+        <rule name="DynamicContent">
+          <conditions>
+            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True" />
+          </conditions>
+          <action type="Rewrite" url="server.js" />
+        </rule>
+      </rules>
+    </rewrite>
+    <iisnode
+      nodeProcessCommandLine="node"
+      watchedFiles="*.js;iisnode.yml"
+      loggingEnabled="true"
+      logDirectory="iisnode"
+      debuggingEnabled="true"
+      maxNamedPipeConnectionRetry="3"
+      namedPipeConnectionRetryDelay="2000" />
+    <security>
+      <requestFiltering>
+        <hiddenSegments>
+          <add segment="node_modules" />
+        </hiddenSegments>
+      </requestFiltering>
+    </security>
+    <httpErrors existingResponse="PassThrough" />
+  </system.webServer>
+</configuration>
+EOF
+else
+    cp backend/web.config deployment/
+fi
+
+# Create package.json for deployment if not included
+if [ ! -f deployment/package.json ]; then
+    echo "Creating package.json for deployment..."
+    cat > deployment/package.json << EOF
+{
+  "name": "fusionfly-app",
+  "version": "1.0.0",
+  "description": "FusionFly GNSS+IMU Data Processing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.x"
+  }
+}
+EOF
+fi
 
 # Create zip package
 echo "Creating deployment package..."
 cd deployment
-zip -r ../deployment.zip . -x "node_modules/*" "uploads/*" "processed/*" "*.log"
+zip -r ../deployment.zip . -x "node_modules/*" "*.log"
 cd ..
 
 # Deploy code
 echo "Deploying code..."
 az webapp deployment source config-zip --resource-group $resource_group --name $app_name --src deployment.zip
+
+# Turn on logging
+echo "Enabling detailed logging..."
+az webapp log config --name $app_name --resource-group $resource_group --application-logging filesystem --detailed-error-messages true --failed-request-tracing true --web-server-logging filesystem
 
 # Get the application URL
 app_url=$(az webapp show --name $app_name --resource-group $resource_group --query defaultHostName -o tsv)
@@ -106,6 +226,14 @@ echo "Your application is deployed to: $app_url"
 echo "API endpoints are accessible at: $app_url/api/*"
 echo ""
 echo "Note: It may take a few minutes for the application to fully start up."
+
+# Restart the app to ensure all settings are applied
+echo "Restarting the app to apply all settings..."
+az webapp restart --name $app_name --resource-group $resource_group
+
+# View logs
+echo "Viewing logs to check for startup issues (press Ctrl+C to exit)..."
+az webapp log tail --name $app_name --resource-group $resource_group
 
 # Cleanup
 echo "Cleaning up temporary files..."

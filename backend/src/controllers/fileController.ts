@@ -2,6 +2,16 @@ import { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileProcessingService } from '../services/fileProcessingService';
+import * as blobStorageService from '../services/blobStorageService';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+// Get container names from environment variables
+const uploadsContainer = process.env.AZURE_STORAGE_CONTAINER_UPLOADS || 'uploads';
+const processedContainer = process.env.AZURE_STORAGE_CONTAINER_PROCESSED || 'processed';
+const resultsContainer = process.env.AZURE_STORAGE_CONTAINER_RESULTS || 'results';
 
 export const fileController = {
   // Upload files (GNSS and/or IMU) and start processing
@@ -17,17 +27,38 @@ export const fileController = {
       const gnssFile = files.gnssFile?.[0];
       const imuFile = files.imuFile?.[0];
       
+      // Upload files to Azure Blob Storage if they exist
+      let gnssFileUrl, imuFileUrl;
+      
+      if (gnssFile) {
+        gnssFileUrl = await blobStorageService.uploadFile(
+          gnssFile.path,
+          gnssFile.filename,
+          uploadsContainer
+        );
+      }
+      
+      if (imuFile) {
+        imuFileUrl = await blobStorageService.uploadFile(
+          imuFile.path,
+          imuFile.filename,
+          uploadsContainer
+        );
+      }
+      
       // Start processing the file(s)
       const jobId = await fileProcessingService.processFiles({
         gnssFile: gnssFile ? {
           originalname: gnssFile.originalname,
           filename: gnssFile.filename,
-          path: gnssFile.path
+          path: gnssFile.path,
+          url: gnssFileUrl
         } : undefined,
         imuFile: imuFile ? {
           originalname: imuFile.originalname,
           filename: imuFile.filename,
-          path: imuFile.path
+          path: imuFile.path,
+          url: imuFileUrl
         } : undefined
       });
       
@@ -36,11 +67,13 @@ export const fileController = {
         jobId,
         gnssFile: gnssFile ? {
           filename: gnssFile.filename,
-          originalname: gnssFile.originalname
+          originalname: gnssFile.originalname,
+          url: gnssFileUrl
         } : null,
         imuFile: imuFile ? {
           filename: imuFile.filename,
-          originalname: imuFile.originalname
+          originalname: imuFile.originalname,
+          url: imuFileUrl
         } : null
       });
     } catch (error) {
@@ -68,79 +101,132 @@ export const fileController = {
   },
 
   // Download a processed file
-  downloadFile: (req: Request, res: Response) => {
+  downloadFile: async (req: Request, res: Response) => {
     try {
       const { filename } = req.params;
-      const filePath = path.join(__dirname, '../../uploads', filename);
       
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: 'File not found' });
+      console.log(`Download request for file: ${filename}`);
+      
+      // Try to find the file in each container
+      let foundFile = false;
+      
+      // Check if file exists in any container and stream it
+      try {
+        console.log(`Attempting to download file: ${filename} from uploads container`);
+        await blobStorageService.streamToResponse(filename, res, uploadsContainer);
+        console.log(`Successfully streamed file: ${filename} from uploads container`);
+        foundFile = true;
+        return;
+      } catch (error) {
+        console.log(`File ${filename} not found in uploads container, trying processed container...`);
       }
       
-      res.download(filePath);
+      if (!foundFile) {
+        try {
+          console.log(`Attempting to download file: ${filename} from processed container`);
+          await blobStorageService.streamToResponse(filename, res, processedContainer);
+          console.log(`Successfully streamed file: ${filename} from processed container`);
+          foundFile = true;
+          return;
+        } catch (error) {
+          console.log(`File ${filename} not found in processed container, trying results container...`);
+        }
+      }
+      
+      if (!foundFile) {
+        try {
+          console.log(`Attempting to download file: ${filename} from results container`);
+          await blobStorageService.streamToResponse(filename, res, resultsContainer);
+          console.log(`Successfully streamed file: ${filename} from results container`);
+          foundFile = true;
+          return;
+        } catch (error) {
+          console.log(`File ${filename} not found in results container either`);
+        }
+      }
+      
+      // If we reach here, we couldn't find the file in any container
+      if (!foundFile) {
+        console.log(`File ${filename} not found in any container`);
+        res.status(404).json({ error: `File ${filename} not found` });
+      }
     } catch (error) {
       console.error('Error downloading file:', error);
-      res.status(500).json({ error: 'Failed to download file' });
+      const errorMessage = error instanceof Error ? error.message : 'Failed to download file';
+      res.status(500).json({ error: errorMessage });
     }
   },
 
   // List all files in the uploads directory
-  listFiles: (req: Request, res: Response) => {
+  listFiles: async (req: Request, res: Response) => {
     try {
-      const uploadsDir = path.join(__dirname, '../../uploads');
+      // Get files from all containers
+      const [uploadFiles, processedFiles, resultFiles] = await Promise.all([
+        blobStorageService.listFiles(uploadsContainer),
+        blobStorageService.listFiles(processedContainer),
+        blobStorageService.listFiles(resultsContainer)
+      ]);
       
-      // Create the directory if it doesn't exist
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
+      // Combine files from all containers
+      const combinedFiles = [
+        ...uploadFiles.map(file => ({
+          ...file,
+          filename: file.name,
+          container: uploadsContainer,
+          size: file.properties.contentLength || 0,
+          createdAt: file.properties.createdOn || new Date()
+        })),
+        ...processedFiles.map(file => ({
+          ...file,
+          filename: file.name,
+          container: processedContainer,
+          size: file.properties.contentLength || 0,
+          createdAt: file.properties.createdOn || new Date()
+        })),
+        ...resultFiles.map(file => ({
+          ...file,
+          filename: file.name,
+          container: resultsContainer,
+          size: file.properties.contentLength || 0,
+          createdAt: file.properties.createdOn || new Date()
+        }))
+      ];
       
-      const files = fs.readdirSync(uploadsDir)
-        .filter(file => !file.startsWith('.')) // Filter out hidden files
-        .map(file => {
-          const filePath = path.join(uploadsDir, file);
-          const stats = fs.statSync(filePath);
-          return {
-            filename: file,
-            size: stats.size,
-            createdAt: stats.birthtime
-          };
-        });
-      
-      res.status(200).json(files);
+      res.status(200).json(combinedFiles);
     } catch (error) {
       console.error('Error listing files:', error);
-      res.status(500).json({ error: 'Failed to list files' });
+      const errorMessage = error instanceof Error ? error.message : 'Failed to list files';
+      res.status(500).json({ error: errorMessage });
     }
   },
   
-  // Clear cache (delete all files in uploads directory)
-  clearCache: (req: Request, res: Response) => {
+  // Clear cache (delete all files)
+  clearCache: async (req: Request, res: Response) => {
     try {
-      const uploadsDir = path.join(__dirname, '../../uploads');
+      console.log('Clearing cache from all containers');
       
-      // Check if directory exists
-      if (!fs.existsSync(uploadsDir)) {
-        return res.status(200).json({ message: 'No cache to clear' });
-      }
+      // Delete all files from all containers
+      const [uploadsCount, processedCount, resultsCount] = await Promise.all([
+        blobStorageService.clearContainer(uploadsContainer),
+        blobStorageService.clearContainer(processedContainer),
+        blobStorageService.clearContainer(resultsContainer)
+      ]);
       
-      const files = fs.readdirSync(uploadsDir)
-        .filter(file => !file.startsWith('.'));  // Filter out hidden files
-      
-      // Delete each file
-      let deletedCount = 0;
-      for (const file of files) {
-        const filePath = path.join(uploadsDir, file);
-        fs.unlinkSync(filePath);
-        deletedCount++;
-      }
+      const totalCount = uploadsCount + processedCount + resultsCount;
       
       res.status(200).json({ 
         message: 'Cache cleared successfully', 
-        deletedCount 
+        deletedCount: totalCount,
+        details: {
+          uploads: uploadsCount,
+          processed: processedCount,
+          results: resultsCount
+        }
       });
     } catch (error) {
       console.error('Error clearing cache:', error);
-      res.status(500).json({ error: 'Failed to clear cache' });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: `Failed to clear cache: ${errorMessage}` });
     }
   }
 }; 

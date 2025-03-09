@@ -68,11 +68,11 @@ export class AuthService {
       role: user.role
     };
     
-    // Fix type issues with jwt.sign
+    // Use type assertion to tell TypeScript to trust us on the types
     return jwt.sign(
       payload, 
-      JWT_SECRET, 
-      { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
+      JWT_SECRET as any, 
+      { expiresIn: JWT_EXPIRES_IN as any }
     );
   }
 
@@ -81,7 +81,7 @@ export class AuthService {
    */
   verifyToken(token: string): any {
     try {
-      return jwt.verify(token, JWT_SECRET);
+      return jwt.verify(token, JWT_SECRET as any);
     } catch (error) {
       throw new Error('Invalid token');
     }
