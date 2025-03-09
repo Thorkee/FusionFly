@@ -1,17 +1,25 @@
 {
-  "name": "gnss-converter",
+  "name": "fusionfly",
   "version": "1.0.0",
-  "description": "GNSS data converter with React frontend and Node.js backend",
+  "description": "FusionFly GNSS+IMU data processing application",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
-    "start:frontend": "cd frontend && npm start",
-    "start:backend": "cd backend && npm run dev",
-    "dev": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
-    "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
-    "build": "cd frontend && npm run build && cd ../backend && npm run build"
+    "install:frontend": "cd frontend && npm install",
+    "install:backend": "cd backend && npm install",
+    "install:all": "npm run install:frontend && npm run install:backend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "start:frontend": "cd frontend && npm run start",
+    "start:backend": "cd backend && node server.js",
+    "dev:backend": "cd backend && npm run dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run start:frontend\""
   },
-  "author": "",
-  "license": "MIT",
   "devDependencies": {
-    "concurrently": "^7.6.0"
+    "concurrently": "^8.2.0"
   }
 } 
