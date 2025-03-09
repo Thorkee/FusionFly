@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build:frontend",
+  "outputDirectory": "frontend/build",
+  "framework": "create-react-app",
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/.*", "dest": "/index.html" }
+  ]
+} 
