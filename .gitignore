@@ -1,6 +1,33 @@
 # Dependencies
 node_modules/
-*/node_modules/
+.pnp
+.pnp.js
+
+# Production
+build/
+dist/
+
+# Local files
+*.log
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.development
+uploads/
+processed/
+results/
+localdb/
+
+# Vercel
+.vercel
+
+# Misc
+.env
+.env.production
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Test files
 testUpload.js
@@ -67,9 +94,6 @@ build/Release
 
 # Yarn Integrity file
 .yarn-integrity
-
-# macOS
-.DS_Store
 
 # Windows
 Thumbs.db
