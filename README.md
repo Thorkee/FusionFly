@@ -113,17 +113,17 @@ FusionFly processes data through a well-defined pipeline:
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                     │
 │  Supported Input Formats                │  Output Formats                           │
-│  ─────────────────────                 │  ─────────────────                        │
-│  GNSS:                                 │  Standardized JSONL                        │
-│  - RINEX (.obs, .rnx, .21o)            │  Location Data                             │
-│  - NMEA (.nmea, .gps, .txt)            │  Trajectory Visualization                  │
-│  - UBX (binary)                        │  Validation Reports                        │
-│  - JSON, CSV                           │                                            │
-│                                        │                                            │
-│  IMU:                                  │                                            │
-│  - Raw IMU data (.imu)                 │                                            │
-│  - CSV, JSON, TXT                      │                                            │
-│                                        │                                            │
+│  ─────────────────────                  │  ─────────────────                        │
+│  GNSS:                                  │  Standardized JSONL                       │
+│  - RINEX (.obs, .rnx, .21o)             │  Location Data                            │
+│  - NMEA (.nmea, .gps, .txt)             │  Trajectory Visualization                 │
+│  - UBX (binary)                         │  Validation Reports                       │
+│  - JSON, CSV                            │                                           │
+│                                         │                                           │
+│  IMU:                                   │                                           │
+│  - Raw IMU data (.imu)                  │                                           │
+│  - CSV, JSON, TXT                       │                                           │
+│                                         │                                           │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
