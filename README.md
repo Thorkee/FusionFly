@@ -1,8 +1,9 @@
 # FusionFly: GNSS+IMU Data Fusion System
 
-![FusionFly](https://img.shields.io/badge/FusionFly-1.0.0-blue)
-![React](https://img.shields.io/badge/React-18.x-61dafb)
-![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d)
+![FusionFly](https://img.shields.io/badge/FusionFly-v1.0.0-4a90e2?style=for-the-badge&logo=appveyor)
+[![FusionFly Wiki](https://img.shields.io/badge/Documentation-Wiki-6caa5f?style=for-the-badge&logo=github)](https://github.com/Thorkee/FusionFly/wiki)
+![React](https://img.shields.io/badge/React-18.x-61dafb?style=for-the-badge&logo=react&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d?style=for-the-badge&logo=node.js&logoColor=white)
 
 FusionFly is an open-source toolkit for processing and fusing GNSS (Global Navigation Satellite System) and IMU (Inertial Measurement Unit) data with Factor Graph Optimization (FGO). The system provides a modern web interface for uploading, processing, visualizing, and downloading standardized navigation data.           
 ## System Architecture
