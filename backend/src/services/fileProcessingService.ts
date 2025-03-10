@@ -42,6 +42,8 @@ interface ProcessFile {
 interface ProcessFilesData {
   gnssFile?: ProcessFile;
   imuFile?: ProcessFile;
+  userId?: string;
+  userEmail?: string;
 }
 
 // Define result interface
@@ -70,6 +72,12 @@ fileProcessingQueue.process(async (job) => {
     await job.progress(10);
     await job.update({ stage: 'uploading', message: 'Starting processing...' });
     console.log(`Starting to process files: GNSS=${gnssFile?.filename}, IMU=${imuFile?.filename}`);
+    
+    // Extract user metadata if available
+    const userMetadata = {
+      userId: data.userId || 'anonymous',
+      uploadedBy: data.userEmail || 'anonymous'
+    };
     
     // Initialize result object
     const result: ProcessFilesResult = {
@@ -119,7 +127,7 @@ fileProcessingQueue.process(async (job) => {
         // Upload the converted JSONL file to processed container
         await job.update({ stage: 'uploading_converted', message: 'Uploading converted GNSS file...' });
         const jsonlBlobName = path.basename(jsonlFilePath);
-        const jsonlUrl = await blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer);
+        const jsonlUrl = await blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer, userMetadata);
         console.log(`Uploaded converted JSONL file to processed container: ${jsonlUrl}`);
       }
       await job.progress(40);
@@ -135,7 +143,7 @@ fileProcessingQueue.process(async (job) => {
       // Upload the location data file to processed container
       await job.update({ stage: 'uploading_location', message: 'Uploading extracted location data...' });
       const locationBlobName = path.basename(locationFilePath);
-      const locationUrl = await blobStorageService.uploadFile(locationFilePath, locationBlobName, processedContainer);
+      const locationUrl = await blobStorageService.uploadFile(locationFilePath, locationBlobName, processedContainer, userMetadata);
       console.log(`Uploaded location data file to processed container: ${locationUrl}`);
       
       await job.progress(60);
@@ -161,13 +169,13 @@ fileProcessingQueue.process(async (job) => {
         
         // Upload validation report to processed container
         const validationBlobName = path.basename(validationReportPath);
-        validationUrl = await blobStorageService.uploadFile(validationReportPath, validationBlobName, processedContainer);
+        validationUrl = await blobStorageService.uploadFile(validationReportPath, validationBlobName, processedContainer, userMetadata);
         console.log(`Uploaded validation report to processed container: ${validationUrl}`);
       }
       
       // Step 4: AI-assisted schema conversion for GNSS data
       await job.update({ stage: 'second_conversion', message: 'Converting to structured schema format...' });
-      const schemaConversionPath = path.join(path.dirname(locationFilePath), `${baseName}.structured.json`);
+      const schemaConversionPath = path.join(path.dirname(locationFilePath), `${baseName}.structured.jsonl`);
       
       try {
         await job.update({ 
@@ -185,7 +193,7 @@ fileProcessingQueue.process(async (job) => {
           });
           
           const schemaConversionBlobName = path.basename(gnssConversionResult.output_path);
-          const schemaConversionUrl = await blobStorageService.uploadFile(gnssConversionResult.output_path, schemaConversionBlobName, processedContainer);
+          const schemaConversionUrl = await blobStorageService.uploadFile(gnssConversionResult.output_path, schemaConversionBlobName, processedContainer, userMetadata);
           console.log(`Uploaded GNSS structured schema file to processed container: ${schemaConversionUrl}`);
           
           result.files.gnss = {
@@ -275,7 +283,7 @@ fileProcessingQueue.process(async (job) => {
         // Upload the converted JSONL file to processed container
         await job.update({ stage: 'uploading_converted_imu', message: 'Uploading converted IMU file...' });
         const jsonlBlobName = path.basename(jsonlFilePath);
-        const jsonlUrl = await blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer);
+        const jsonlUrl = await blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer, userMetadata);
         console.log(`Uploaded converted IMU file to processed container: ${jsonlUrl}`);
       }
       await job.progress(80);
@@ -283,7 +291,7 @@ fileProcessingQueue.process(async (job) => {
       // Step 2: AI-assisted schema conversion for IMU data
       await job.update({ stage: 'second_conversion_imu', message: 'Converting IMU data to structured schema format...' });
       const baseName = path.basename(jsonlFilePath, '.jsonl');
-      const schemaConversionPath = path.join(path.dirname(jsonlFilePath), `${baseName}.structured.json`);
+      const schemaConversionPath = path.join(path.dirname(jsonlFilePath), `${baseName}.structured.jsonl`);
       
       try {
         await job.update({ 
@@ -301,7 +309,7 @@ fileProcessingQueue.process(async (job) => {
           });
           
           const schemaConversionBlobName = path.basename(imuConversionResult.output_path);
-          const schemaConversionUrl = await blobStorageService.uploadFile(imuConversionResult.output_path, schemaConversionBlobName, processedContainer);
+          const schemaConversionUrl = await blobStorageService.uploadFile(imuConversionResult.output_path, schemaConversionBlobName, processedContainer, userMetadata);
           console.log(`Uploaded IMU structured schema file to processed container: ${schemaConversionUrl}`);
           
           result.files.imu = {

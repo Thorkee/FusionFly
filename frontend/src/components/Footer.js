@@ -70,7 +70,7 @@ function Footer() {
             <div className="px-2 py-1">•</div>
             <div className="px-2 py-1">
               <a 
-                href="https://github.com/Thorkee/LLMFGO/wiki/documentation" 
+                href="https://github.com/Thorkee/FusionFly/wiki" 
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
