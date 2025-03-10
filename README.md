@@ -1,7 +1,6 @@
 # FusionFly: GNSS+IMU Data Fusion System
 
 ![FusionFly](https://img.shields.io/badge/FusionFly-1.0.0-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
 ![React](https://img.shields.io/badge/React-18.x-61dafb)
 ![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d)
 
