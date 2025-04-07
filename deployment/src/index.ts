@@ -5,14 +5,13 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { fileRoutes } from './routes/fileRoutes';
-import { authRoutes } from './routes/authRoutes';
 
 // Load environment variables
 dotenv.config();
 
 // Create Express app
 const app = express();
-const PORT = process.env.PORT || 8002;
+const PORT = process.env.PORT || 8000;
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, '../uploads');
@@ -28,7 +27,6 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Routes
 app.use('/api/files', fileRoutes);
-app.use('/api/auth', authRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

@@ -15,13 +15,23 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -53,6 +63,7 @@ const nmeaSimple = __importStar(require("nmea-simple"));
 const ubx_parser_1 = require("@csllc/ubx-parser");
 const blobStorageService = __importStar(require("./blobStorageService"));
 const aiService_1 = require("./aiService");
+const validationService_1 = require("./validationService");
 // Load environment variables
 dotenv_1.default.config();
 // Get container names from environment variables
@@ -76,6 +87,11 @@ fileProcessingQueue.process((job) => __awaiter(void 0, void 0, void 0, function*
         yield job.progress(10);
         yield job.update({ stage: 'uploading', message: 'Starting processing...' });
         console.log(`Starting to process files: GNSS=${gnssFile === null || gnssFile === void 0 ? void 0 : gnssFile.filename}, IMU=${imuFile === null || imuFile === void 0 ? void 0 : imuFile.filename}`);
+        // Extract user metadata if available
+        const userMetadata = {
+            userId: data.userId || 'anonymous',
+            uploadedBy: data.userEmail || 'anonymous'
+        };
         // Initialize result object
         const result = {
             message: 'File processing completed successfully',
@@ -87,6 +103,9 @@ fileProcessingQueue.process((job) => __awaiter(void 0, void 0, void 0, function*
             const fileExtension = path_1.default.extname(filePath).toLowerCase();
             // Step 1: Convert to JSONL if needed
             let jsonlFilePath = filePath;
+            let jsonlUrl = null;
+            let locationUrl = null;
+            let validationUrl = null;
             if (fileExtension !== '.jsonl') {
                 const baseName = path_1.default.basename(filePath, fileExtension);
                 jsonlFilePath = path_1.default.join(path_1.default.dirname(filePath), `${baseName}.jsonl`);
@@ -118,28 +137,108 @@ fileProcessingQueue.process((job) => __awaiter(void 0, void 0, void 0, function*
                 // Upload the converted JSONL file to processed container
                 yield job.update({ stage: 'uploading_converted', message: 'Uploading converted GNSS file...' });
                 const jsonlBlobName = path_1.default.basename(jsonlFilePath);
-                const jsonlUrl = yield blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer);
+                jsonlUrl = yield blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer, userMetadata);
                 console.log(`Uploaded converted JSONL file to processed container: ${jsonlUrl}`);
             }
             yield job.progress(40);
             // Step 2: Extract location data
-            yield job.update({ stage: 'extracting_location', message: 'Extracting location data from GNSS file...' });
+            yield job.update({ stage: 'extracting_location', message: 'Extracting location data using AI...' });
             const baseName = path_1.default.basename(jsonlFilePath, '.jsonl');
             const locationFilePath = path_1.default.join(path_1.default.dirname(jsonlFilePath), `${baseName}.location.jsonl`);
-            // Extract location data from JSONL
-            yield extractLocationData(jsonlFilePath, locationFilePath);
-            // Upload the location data file to processed container
-            yield job.update({ stage: 'uploading_location', message: 'Uploading extracted location data...' });
+            // Determine data type from file name if not already known
+            const fileName = path_1.default.basename(jsonlFilePath).toLowerCase();
+            const dataType = fileName.includes('gnss') || fileName.includes('gps') ||
+                fileName.includes('rinex') || fileName.includes('nmea') ? 'gnss' :
+                fileName.includes('imu') || fileName.includes('ins') ? 'imu' : 'gnss';
+            // Verify first LLM output file exists before passing to second LLM
+            if (!fs_1.default.existsSync(jsonlFilePath)) {
+                console.error(`ERROR: First LLM output file ${jsonlFilePath} does not exist! Cannot proceed to location extraction.`);
+                throw new Error(`First conversion output file not found at ${jsonlFilePath}`);
+            }
+            // Check if first LLM output file has content
+            const firstLlmStats = fs_1.default.statSync(jsonlFilePath);
+            if (firstLlmStats.size === 0) {
+                console.error(`ERROR: First LLM output file ${jsonlFilePath} is empty (0 bytes)! Cannot proceed to location extraction.`);
+                throw new Error(`First conversion output file is empty at ${jsonlFilePath}`);
+            }
+            // Validate the first LLM output for quality before proceeding
+            const firstLlmValidation = yield (0, validationService_1.validateLlmOutput)(jsonlFilePath, dataType);
+            if (!firstLlmValidation.valid) {
+                console.warn(`First LLM output has ${firstLlmValidation.errors.length} validation issues. Proceeding with caution.`);
+                yield job.update({
+                    stage: 'first_conversion_validation_issues',
+                    message: `Proceeding with caution: First conversion has ${firstLlmValidation.errors.length} validation issues`,
+                    details: { validation: firstLlmValidation }
+                });
+            }
+            console.log(`PATH VERIFICATION: First LLM output file ${jsonlFilePath} exists with ${firstLlmStats.size} bytes`);
+            console.log(`PATH FLOW: FIRST LLM OUTPUT → ${jsonlFilePath} → SECOND LLM INPUT`);
+            // Always use AI for location extraction (second LLM call)
+            console.log(`Using AI-assisted location extraction for ${dataType} data`);
+            const locationFormat = `${dataType}_location`;
+            // Make up to 3 attempts for location extraction
+            let locationResult;
+            let locationAttempts = 0;
+            const MAX_LOCATION_ATTEMPTS = 3;
+            while (locationAttempts < MAX_LOCATION_ATTEMPTS) {
+                locationAttempts++;
+                yield job.update({
+                    stage: 'extracting_location',
+                    message: `Extracting location data using AI${locationAttempts > 1 ? ` (attempt ${locationAttempts})` : ''}...`
+                });
+                console.log(`\n========== SECOND LLM: LOCATION EXTRACTION (ATTEMPT ${locationAttempts}/${MAX_LOCATION_ATTEMPTS}) ==========\n`);
+                locationResult = yield (0, aiService_1.aiAssistedConversion)(jsonlFilePath, locationFilePath, locationFormat);
+                console.log(`\n========== SECOND LLM COMPLETE ==========\n`);
+                if (locationResult.success) {
+                    break; // Success, no need for further attempts
+                }
+                else if (locationAttempts < MAX_LOCATION_ATTEMPTS) {
+                    console.error(`Location extraction failed on attempt ${locationAttempts}. Retrying...`);
+                    yield job.update({
+                        stage: 'extracting_location_retry',
+                        message: `Location extraction failed. Retrying (${locationAttempts}/${MAX_LOCATION_ATTEMPTS})...`,
+                        details: { error: locationResult.error }
+                    });
+                }
+            }
+            if (!locationResult || !locationResult.success) {
+                console.error(`Location extraction failed after ${MAX_LOCATION_ATTEMPTS} attempts: ${locationResult === null || locationResult === void 0 ? void 0 : locationResult.error}`);
+                throw new Error(`Failed to extract location data after ${MAX_LOCATION_ATTEMPTS} attempts: ${locationResult === null || locationResult === void 0 ? void 0 : locationResult.error}`);
+            }
+            // Verify second LLM output file exists before proceeding
+            if (!fs_1.default.existsSync(locationFilePath)) {
+                console.error(`ERROR: Second LLM output file ${locationFilePath} does not exist!`);
+                throw new Error(`Location extraction output file not found at ${locationFilePath}`);
+            }
+            // Check if second LLM output file has content
+            const secondLlmStats = fs_1.default.statSync(locationFilePath);
+            if (secondLlmStats.size === 0) {
+                console.error(`ERROR: Second LLM output file ${locationFilePath} is empty (0 bytes)!`);
+                throw new Error(`Location extraction output file is empty at ${locationFilePath}`);
+            }
+            // Validate the second LLM output before proceeding
+            const secondLlmValidation = yield (0, validationService_1.validateLlmOutput)(locationFilePath, locationFormat);
+            if (!secondLlmValidation.valid) {
+                console.warn(`Second LLM output has ${secondLlmValidation.errors.length} validation issues.`);
+                yield job.update({
+                    stage: 'second_conversion_validation_issues',
+                    message: `Location data has ${secondLlmValidation.errors.length} validation issues.`,
+                    details: { validation: secondLlmValidation }
+                });
+            }
+            console.log(`PATH VERIFICATION: Second LLM output file ${locationFilePath} exists with ${secondLlmStats.size} bytes`);
+            // Upload the location data to Azure Blob Storage
             const locationBlobName = path_1.default.basename(locationFilePath);
-            const locationUrl = yield blobStorageService.uploadFile(locationFilePath, locationBlobName, processedContainer);
+            locationUrl = yield blobStorageService.uploadFile(locationFilePath, locationBlobName, processedContainer, userMetadata);
             console.log(`Uploaded location data file to processed container: ${locationUrl}`);
-            yield job.progress(60);
             // Step 3: Validate the extracted location data
             yield job.update({ stage: 'validating', message: 'Validating location data...' });
-            const validationResult = yield validateLocationData(locationFilePath);
-            // Create validation report if there are issues
+            const validationResult = {
+                valid: secondLlmValidation.valid,
+                issues: secondLlmValidation.errors.concat(secondLlmValidation.warnings)
+            };
+            // Create validation report
             let validationReportPath = null;
-            let validationUrl = null;
             if (!validationResult.valid && validationResult.issues.length > 0) {
                 yield job.update({
                     stage: 'validation_report',
@@ -153,69 +252,122 @@ fileProcessingQueue.process((job) => __awaiter(void 0, void 0, void 0, function*
                 }, null, 2));
                 // Upload validation report to processed container
                 const validationBlobName = path_1.default.basename(validationReportPath);
-                validationUrl = yield blobStorageService.uploadFile(validationReportPath, validationBlobName, processedContainer);
+                validationUrl = yield blobStorageService.uploadFile(validationReportPath, validationBlobName, processedContainer, userMetadata);
                 console.log(`Uploaded validation report to processed container: ${validationUrl}`);
             }
             // Step 4: AI-assisted schema conversion for GNSS data
             yield job.update({ stage: 'second_conversion', message: 'Converting to structured schema format...' });
-            const schemaConversionPath = path_1.default.join(path_1.default.dirname(locationFilePath), `${baseName}.structured.json`);
             try {
+                const structuredFilePath = path_1.default.join(path_1.default.dirname(locationFilePath), `${baseName}.structured.jsonl`);
+                // Always use AI for schema conversion (third LLM call)
+                const schemaFormat = `${dataType}_schema`;
+                console.log(`Attempting AI-assisted conversion for ${schemaFormat} format`);
+                // Verify second LLM output file exists before passing to third LLM
+                if (!fs_1.default.existsSync(locationFilePath)) {
+                    console.error(`ERROR: Second LLM output file ${locationFilePath} does not exist! Cannot proceed to schema conversion.`);
+                    throw new Error(`Location extraction output file not found at ${locationFilePath}`);
+                }
+                console.log(`PATH FLOW: SECOND LLM OUTPUT → ${locationFilePath} → THIRD LLM INPUT`);
+                // Use AI conversion for this step with multiple attempts
                 yield job.update({
                     stage: 'second_conversion_ai',
-                    message: 'Generating AI-assisted conversion code for structured schema...'
+                    message: 'Using AI to convert location data to structured schema format...'
                 });
-                const gnssConversionResult = yield (0, aiService_1.aiAssistedConversion)(locationFilePath, schemaConversionPath, 'gnss');
-                if (gnssConversionResult.success && gnssConversionResult.output_path) {
-                    // Upload the structured schema file to processed container
+                console.log(`THIRD LLM: Input Path: ${locationFilePath}, Output Path: ${structuredFilePath}`);
+                // Make up to 3 attempts for schema conversion
+                let schemaResult;
+                let schemaAttempts = 0;
+                const MAX_SCHEMA_ATTEMPTS = 3;
+                while (schemaAttempts < MAX_SCHEMA_ATTEMPTS) {
+                    schemaAttempts++;
                     yield job.update({
-                        stage: 'second_conversion_complete',
-                        message: 'Schema conversion successful, uploading structured data...'
+                        stage: 'schema_conversion',
+                        message: `Converting to schema format${schemaAttempts > 1 ? ` (attempt ${schemaAttempts})` : ''}...`
                     });
-                    const schemaConversionBlobName = path_1.default.basename(gnssConversionResult.output_path);
-                    const schemaConversionUrl = yield blobStorageService.uploadFile(gnssConversionResult.output_path, schemaConversionBlobName, processedContainer);
-                    console.log(`Uploaded GNSS structured schema file to processed container: ${schemaConversionUrl}`);
-                    result.files.gnss = {
-                        original: path_1.default.basename(filePath),
-                        jsonl: path_1.default.basename(jsonlFilePath),
-                        location: path_1.default.basename(locationFilePath),
-                        validation: validationReportPath ? path_1.default.basename(validationReportPath) : null,
-                        structured: schemaConversionBlobName
-                    };
+                    console.log(`\n========== THIRD LLM: SCHEMA CONVERSION (ATTEMPT ${schemaAttempts}/${MAX_SCHEMA_ATTEMPTS}) ==========\n`);
+                    schemaResult = yield (0, aiService_1.aiAssistedConversion)(locationFilePath, structuredFilePath, schemaFormat);
+                    console.log(`\n========== THIRD LLM COMPLETE ==========\n`);
+                    if (schemaResult.success) {
+                        break; // Success, no need for further attempts
+                    }
+                    else if (schemaAttempts < MAX_SCHEMA_ATTEMPTS) {
+                        console.error(`Schema conversion failed on attempt ${schemaAttempts}. Retrying...`);
+                        yield job.update({
+                            stage: 'schema_conversion_retry',
+                            message: `Schema conversion failed. Retrying (${schemaAttempts}/${MAX_SCHEMA_ATTEMPTS})...`,
+                            details: { error: schemaResult.error }
+                        });
+                    }
                 }
-                else {
+                if (!schemaResult || !schemaResult.success) {
+                    console.error(`Schema conversion failed after ${MAX_SCHEMA_ATTEMPTS} attempts: ${schemaResult === null || schemaResult === void 0 ? void 0 : schemaResult.error}`);
                     yield job.update({
                         stage: 'second_conversion_failed',
-                        message: 'Schema conversion failed, continuing with basic data...',
-                        details: { error: gnssConversionResult.error }
+                        message: `GNSS schema conversion failed after ${MAX_SCHEMA_ATTEMPTS} attempts: ${schemaResult === null || schemaResult === void 0 ? void 0 : schemaResult.error}`,
+                        details: { error: schemaResult === null || schemaResult === void 0 ? void 0 : schemaResult.error }
                     });
-                    console.error(`GNSS schema conversion failed: ${gnssConversionResult.error}`);
-                    result.files.gnss = {
-                        original: path_1.default.basename(filePath),
-                        jsonl: path_1.default.basename(jsonlFilePath),
-                        location: path_1.default.basename(locationFilePath),
-                        validation: validationReportPath ? path_1.default.basename(validationReportPath) : null,
-                        structuredError: gnssConversionResult.error
-                    };
+                    throw new Error(`GNSS schema conversion failed after ${MAX_SCHEMA_ATTEMPTS} attempts: ${schemaResult === null || schemaResult === void 0 ? void 0 : schemaResult.error}`);
                 }
-            }
-            catch (schemaError) {
-                yield job.update({
-                    stage: 'second_conversion_error',
-                    message: 'Schema conversion encountered an error, continuing with basic data...',
-                    details: { error: schemaError instanceof Error ? schemaError.message : String(schemaError) }
-                });
+                // Verify third LLM output file exists
+                if (!fs_1.default.existsSync(structuredFilePath)) {
+                    console.error(`ERROR: Third LLM output file ${structuredFilePath} does not exist!`);
+                    throw new Error(`Schema conversion output file not found at ${structuredFilePath}`);
+                }
+                // Validate the third LLM output
+                const thirdLlmStats = fs_1.default.statSync(structuredFilePath);
+                const thirdLlmValidation = yield (0, validationService_1.validateLlmOutput)(structuredFilePath, schemaFormat);
+                if (!thirdLlmValidation.valid) {
+                    console.warn(`Third LLM output has ${thirdLlmValidation.errors.length} validation issues.`);
+                    yield job.update({
+                        stage: 'third_conversion_validation_issues',
+                        message: `Schema data has ${thirdLlmValidation.errors.length} validation issues.`,
+                        details: { validation: thirdLlmValidation }
+                    });
+                }
+                console.log(`PATH VERIFICATION: Third LLM output file ${structuredFilePath} exists with ${thirdLlmStats.size} bytes`);
+                // Upload the structured schema to Azure Blob Storage
+                const structuredBlobName = path_1.default.basename(structuredFilePath);
+                const structuredUrl = yield blobStorageService.uploadFile(structuredFilePath, structuredBlobName, processedContainer, userMetadata);
+                console.log(`Uploaded GNSS structured schema file to processed container: ${structuredUrl}`);
+                // Add to result object
                 result.files.gnss = {
-                    original: path_1.default.basename(filePath),
+                    original: gnssFile.filename,
                     jsonl: path_1.default.basename(jsonlFilePath),
                     location: path_1.default.basename(locationFilePath),
-                    validation: validationReportPath ? path_1.default.basename(validationReportPath) : null,
-                    structuredError: schemaError instanceof Error ? schemaError.message : String(schemaError)
+                    structured: structuredBlobName,
+                    urls: {
+                        jsonl: jsonlUrl,
+                        location: locationUrl,
+                        structured: structuredUrl,
+                        validation: validationUrl
+                    }
+                };
+                result.gnssValidation = {
+                    valid: validationResult.valid,
+                    issueCount: validationResult.issues.length
                 };
             }
-            result.gnssValidation = {
-                valid: validationResult.valid,
-                issueCount: validationResult.issues.length
-            };
+            catch (schemaError) {
+                console.error('Error during schema conversion:', schemaError);
+                yield job.update({
+                    stage: 'second_conversion_error',
+                    message: 'Error during schema conversion',
+                    details: { error: schemaError instanceof Error ? schemaError.message : String(schemaError) }
+                });
+                // We'll still continue with the overall process but mark this step as failed
+                result.message = 'File processing completed with some issues';
+                result.files.gnss = {
+                    original: gnssFile.filename,
+                    jsonl: path_1.default.basename(jsonlFilePath),
+                    location: path_1.default.basename(locationFilePath),
+                    structured: null,
+                    urls: {
+                        jsonl: jsonlUrl,
+                        location: locationUrl,
+                        validation: validationUrl
+                    }
+                };
+            }
         }
         // Process IMU file if provided
         if (imuFile) {
@@ -254,48 +406,74 @@ fileProcessingQueue.process((job) => __awaiter(void 0, void 0, void 0, function*
                 // Upload the converted JSONL file to processed container
                 yield job.update({ stage: 'uploading_converted_imu', message: 'Uploading converted IMU file...' });
                 const jsonlBlobName = path_1.default.basename(jsonlFilePath);
-                const jsonlUrl = yield blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer);
+                const jsonlUrl = yield blobStorageService.uploadFile(jsonlFilePath, jsonlBlobName, processedContainer, userMetadata);
                 console.log(`Uploaded converted IMU file to processed container: ${jsonlUrl}`);
             }
             yield job.progress(80);
             // Step 2: AI-assisted schema conversion for IMU data
             yield job.update({ stage: 'second_conversion_imu', message: 'Converting IMU data to structured schema format...' });
             const baseName = path_1.default.basename(jsonlFilePath, '.jsonl');
-            const schemaConversionPath = path_1.default.join(path_1.default.dirname(jsonlFilePath), `${baseName}.structured.json`);
+            const schemaConversionPath = path_1.default.join(path_1.default.dirname(jsonlFilePath), `${baseName}.structured.jsonl`);
             try {
                 yield job.update({
                     stage: 'second_conversion_ai_imu',
                     message: 'Generating AI-assisted conversion code for IMU structured schema...'
                 });
-                const imuConversionResult = yield (0, aiService_1.aiAssistedConversion)(jsonlFilePath, schemaConversionPath, 'imu');
-                if (imuConversionResult.success && imuConversionResult.output_path) {
-                    // Upload the structured schema file to processed container
-                    yield job.update({
-                        stage: 'second_conversion_complete_imu',
-                        message: 'IMU schema conversion successful, uploading structured data...'
-                    });
-                    const schemaConversionBlobName = path_1.default.basename(imuConversionResult.output_path);
-                    const schemaConversionUrl = yield blobStorageService.uploadFile(imuConversionResult.output_path, schemaConversionBlobName, processedContainer);
-                    console.log(`Uploaded IMU structured schema file to processed container: ${schemaConversionUrl}`);
-                    result.files.imu = {
-                        original: path_1.default.basename(filePath),
-                        jsonl: path_1.default.basename(jsonlFilePath),
-                        structured: schemaConversionBlobName
-                    };
+                // Verify first LLM output file exists before passing to schema conversion
+                if (!fs_1.default.existsSync(jsonlFilePath)) {
+                    console.error(`ERROR: IMU first LLM output file ${jsonlFilePath} does not exist! Cannot proceed to schema conversion.`);
+                    throw new Error(`IMU conversion output file not found at ${jsonlFilePath}`);
                 }
-                else {
+                // Check if first LLM output file has content
+                const imuFirstLlmStats = fs_1.default.statSync(jsonlFilePath);
+                if (imuFirstLlmStats.size === 0) {
+                    console.error(`ERROR: IMU first LLM output file ${jsonlFilePath} is empty (0 bytes)! Cannot proceed.`);
+                    throw new Error(`IMU conversion output file is empty at ${jsonlFilePath}`);
+                }
+                console.log(`PATH VERIFICATION: IMU first LLM output file ${jsonlFilePath} exists with ${imuFirstLlmStats.size} bytes`);
+                console.log(`PATH FLOW: IMU FIRST LLM OUTPUT → ${jsonlFilePath} → IMU SECOND LLM INPUT`);
+                console.log(`IMU SECOND LLM: Input Path: ${jsonlFilePath}, Output Path: ${schemaConversionPath}`);
+                const imuConversionResult = yield (0, aiService_1.aiAssistedConversion)(jsonlFilePath, schemaConversionPath, 'imu');
+                if (!imuConversionResult.success) {
+                    console.error(`IMU schema conversion failed: ${imuConversionResult.error}`);
                     yield job.update({
                         stage: 'second_conversion_failed_imu',
-                        message: 'IMU schema conversion failed, continuing with basic data...',
+                        message: `IMU schema conversion failed: ${imuConversionResult.error}`,
                         details: { error: imuConversionResult.error }
                     });
-                    console.error(`IMU schema conversion failed: ${imuConversionResult.error}`);
-                    result.files.imu = {
-                        original: path_1.default.basename(filePath),
-                        jsonl: path_1.default.basename(jsonlFilePath),
-                        structuredError: imuConversionResult.error
-                    };
+                    throw new Error(`IMU schema conversion failed: ${imuConversionResult.error}`);
                 }
+                // Verify IMU second LLM output file exists
+                if (!fs_1.default.existsSync(schemaConversionPath)) {
+                    console.error(`ERROR: IMU second LLM output file ${schemaConversionPath} does not exist!`);
+                    throw new Error(`IMU schema conversion output file not found at ${schemaConversionPath}`);
+                }
+                // Check if IMU second LLM output file has content
+                const imuSecondLlmStats = fs_1.default.statSync(schemaConversionPath);
+                if (imuSecondLlmStats.size === 0) {
+                    console.error(`ERROR: IMU second LLM output file ${schemaConversionPath} is empty (0 bytes)!`);
+                    throw new Error(`IMU schema conversion output file is empty at ${schemaConversionPath}`);
+                }
+                console.log(`PATH VERIFICATION: IMU second LLM output file ${schemaConversionPath} exists with ${imuSecondLlmStats.size} bytes`);
+                // Upload the structured schema file to processed container
+                yield job.update({
+                    stage: 'second_conversion_complete_imu',
+                    message: 'IMU schema conversion completed successfully',
+                    progress: 95
+                });
+                const schemaConversionBlobName = path_1.default.basename(schemaConversionPath);
+                const schemaUrl = yield blobStorageService.uploadFile(schemaConversionPath, schemaConversionBlobName, processedContainer, userMetadata);
+                console.log(`Uploaded IMU structured schema file to processed container: ${schemaUrl}`);
+                // Add to result object
+                result.files.imu = {
+                    original: imuFile.filename,
+                    jsonl: path_1.default.basename(jsonlFilePath),
+                    structured: schemaConversionBlobName,
+                    urls: {
+                        jsonl: null, // Will be set if we had to convert
+                        structured: schemaUrl
+                    }
+                };
             }
             catch (schemaError) {
                 yield job.update({
@@ -319,9 +497,19 @@ fileProcessingQueue.process((job) => __awaiter(void 0, void 0, void 0, function*
                 message: 'GNSS+IMU fusion will be available in a future update'
             };
         }
+        // Final steps - mark as complete
         yield job.progress(100);
-        yield job.update({ stage: 'complete', message: 'Processing completed successfully!' });
-        return result;
+        yield job.update({
+            stage: 'complete',
+            message: 'Processing completed successfully',
+            progress: 100,
+            state: 'completed'
+        });
+        return {
+            success: true,
+            message: result.message,
+            result
+        };
     }
     catch (error) {
         console.error('Error processing files:', error);
@@ -351,11 +539,13 @@ function convertToJsonl(inputPath, outputPath, fileExtension) {
             dataType = 'imu';
         }
         console.log(`Detected data type: ${dataType}`);
-        // Use AI-assisted conversion first
+        // Use only AI-assisted conversion
         console.log(`Using AI-assisted conversion for ${dataType} data`);
         try {
+            console.log(`\n========== FIRST LLM: FORMAT CONVERSION ==========\n`);
             console.log(`Calling aiAssistedConversion with dataType=${dataType}, inputPath=${inputPath}`);
             const conversionResult = yield (0, aiService_1.aiAssistedConversion)(inputPath, outputPath, dataType);
+            console.log(`\n========== FIRST LLM COMPLETE ==========\n`);
             console.log(`AI-assisted conversion result:`, conversionResult);
             if (conversionResult.success && conversionResult.output_path) {
                 // If AI conversion succeeded, copy the result to the expected output path
@@ -366,55 +556,19 @@ function convertToJsonl(inputPath, outputPath, fileExtension) {
             }
             else {
                 console.error(`AI-assisted conversion failed: ${conversionResult.error}`);
-                // Don't throw an error here, just log it and continue to fallback
+                throw new Error(`AI-assisted conversion failed: ${conversionResult.error}`);
             }
         }
         catch (error) {
             console.error(`Error during AI conversion:`, error);
-            // Don't throw an error here, just log it and continue to fallback
-        }
-        // Only use standard conversion as fallback
-        console.log("AI-assisted conversion failed, falling back to standard conversion methods");
-        try {
-            // Fall back to standard conversion based on file extension
-            switch (fileExtension) {
-                case '.obs':
-                case '.rnx':
-                case '.21o':
-                case '.22o':
-                case '.23o':
-                    yield convertRinexToJsonl(inputPath, outputPath);
-                    break;
-                case '.nmea':
-                case '.gps':
-                case '.txt':
-                    yield convertNmeaToJsonl(inputPath, outputPath);
-                    break;
-                case '.ubx':
-                    yield convertUbxToJsonl(inputPath, outputPath);
-                    break;
-                case '.json':
-                    yield convertJsonToJsonl(inputPath, outputPath);
-                    break;
-                case '.csv':
-                    yield basicFileToJsonl(inputPath, outputPath);
-                    break;
-                default:
-                    // For unknown formats, try format detection
-                    console.log(`No predefined converter for ${fileExtension}, attempting format detection...`);
-                    yield detectAndConvertToJsonl(inputPath, outputPath);
-            }
-        }
-        catch (error) {
-            console.error(`Error in standard conversion process: ${error}`);
-            throw new Error(`All conversion methods failed for ${inputPath}: ${error}`);
+            throw new Error(`AI-assisted conversion failed for ${inputPath}: ${error}`);
         }
     });
 }
 // Convert RINEX observation files to JSONL
 function convertRinexToJsonl(inputPath, outputPath) {
-    var _a, e_1, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, e_1, _b, _c;
         console.log('Processing RINEX file');
         try {
             // Since we can't use the georinex library directly in Node.js, 
@@ -432,74 +586,69 @@ function convertRinexToJsonl(inputPath, outputPath) {
             let recordCount = 0;
             let parseError = false;
             try {
-                for (var _d = true, rl_1 = __asyncValues(rl), rl_1_1; rl_1_1 = yield rl_1.next(), _a = rl_1_1.done, !_a;) {
+                for (var _d = true, rl_1 = __asyncValues(rl), rl_1_1; rl_1_1 = yield rl_1.next(), _a = rl_1_1.done, !_a; _d = true) {
                     _c = rl_1_1.value;
                     _d = false;
+                    const line = _c;
+                    lineCount++;
                     try {
-                        const line = _c;
-                        lineCount++;
-                        try {
-                            // Process header
-                            if (!headerEnded) {
-                                if (line.includes('END OF HEADER')) {
-                                    headerEnded = true;
-                                }
-                                continue;
+                        // Process header
+                        if (!headerEnded) {
+                            if (line.includes('END OF HEADER')) {
+                                headerEnded = true;
                             }
-                            // Epoch line starts with '>'
-                            if (line.trim().startsWith('>')) {
-                                // If we have epoch data from a previous epoch, write it
-                                if (epochTime && Object.keys(epochData).length > 0) {
-                                    const jsonlLine = JSON.stringify({
-                                        timestamp_ms: epochTime,
-                                        type: 'RINEX',
-                                        data: epochData
-                                    });
-                                    writeStream.write(jsonlLine + '\n');
-                                    recordCount++;
-                                }
-                                // Parse epoch time
-                                const parts = line.trim().split(/\s+/);
-                                if (parts.length >= 7) {
-                                    const year = parseInt(parts[1]);
-                                    const month = parseInt(parts[2]);
-                                    const day = parseInt(parts[3]);
-                                    const hour = parseInt(parts[4]);
-                                    const minute = parseInt(parts[5]);
-                                    const second = parseFloat(parts[6]);
-                                    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, Math.floor(second)));
-                                    epochTime = date.getTime() + (second % 1) * 1000;
-                                    epochData = {};
-                                }
+                            continue;
+                        }
+                        // Epoch line starts with '>'
+                        if (line.trim().startsWith('>')) {
+                            // If we have epoch data from a previous epoch, write it
+                            if (epochTime && Object.keys(epochData).length > 0) {
+                                const jsonlLine = JSON.stringify({
+                                    timestamp_ms: epochTime,
+                                    type: 'RINEX',
+                                    data: epochData
+                                });
+                                writeStream.write(jsonlLine + '\n');
+                                recordCount++;
                             }
-                            // Observation data lines
-                            else if (headerEnded && epochTime) {
-                                // RINEX data is space-delimited
-                                const parts = line.trim().split(/\s+/);
-                                if (parts.length >= 2) {
-                                    const satSystem = parts[0].charAt(0);
-                                    const satNumber = parseInt(parts[0].substring(1));
-                                    if (!isNaN(satNumber)) {
-                                        // Process observation values
-                                        const observations = {};
-                                        for (let i = 1; i < parts.length; i++) {
-                                            const value = parseFloat(parts[i]);
-                                            if (!isNaN(value)) {
-                                                observations[`obs${i}`] = value;
-                                            }
-                                        }
-                                        epochData[`${satSystem}${satNumber}`] = observations;
-                                    }
-                                }
+                            // Parse epoch time
+                            const parts = line.trim().split(/\s+/);
+                            if (parts.length >= 7) {
+                                const year = parseInt(parts[1]);
+                                const month = parseInt(parts[2]);
+                                const day = parseInt(parts[3]);
+                                const hour = parseInt(parts[4]);
+                                const minute = parseInt(parts[5]);
+                                const second = parseFloat(parts[6]);
+                                const date = new Date(Date.UTC(year, month - 1, day, hour, minute, Math.floor(second)));
+                                epochTime = date.getTime() + (second % 1) * 1000;
+                                epochData = {};
                             }
                         }
-                        catch (error) {
-                            console.error(`Error parsing RINEX line ${lineCount}:`, error);
-                            parseError = true;
+                        // Observation data lines
+                        else if (headerEnded && epochTime) {
+                            // RINEX data is space-delimited
+                            const parts = line.trim().split(/\s+/);
+                            if (parts.length >= 2) {
+                                const satSystem = parts[0].charAt(0);
+                                const satNumber = parseInt(parts[0].substring(1));
+                                if (!isNaN(satNumber)) {
+                                    // Process observation values
+                                    const observations = {};
+                                    for (let i = 1; i < parts.length; i++) {
+                                        const value = parseFloat(parts[i]);
+                                        if (!isNaN(value)) {
+                                            observations[`obs${i}`] = value;
+                                        }
+                                    }
+                                    epochData[`${satSystem}${satNumber}`] = observations;
+                                }
+                            }
                         }
                     }
-                    finally {
-                        _d = true;
+                    catch (error) {
+                        console.error(`Error parsing RINEX line ${lineCount}:`, error);
+                        parseError = true;
                     }
                 }
             }
@@ -550,78 +699,21 @@ function convertRinexToJsonl(inputPath, outputPath) {
 }
 // Convert NMEA sentences to JSONL
 function convertNmeaToJsonl(inputPath, outputPath) {
-    var _a, e_2, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
         console.log('Processing NMEA file');
         try {
-            const writeStream = fs_1.default.createWriteStream(outputPath);
-            const fileStream = fs_1.default.createReadStream(inputPath);
-            const rl = readline_1.default.createInterface({
-                input: fileStream,
-                crlfDelay: Infinity
-            });
-            let lineCount = 0;
-            let recordCount = 0;
-            let parseErrors = 0;
-            try {
-                for (var _d = true, rl_2 = __asyncValues(rl), rl_2_1; rl_2_1 = yield rl_2.next(), _a = rl_2_1.done, !_a;) {
-                    _c = rl_2_1.value;
-                    _d = false;
-                    try {
-                        const line = _c;
-                        lineCount++;
-                        try {
-                            // Parse NMEA sentence
-                            const nmeaData = parseNmeaSentence(line.trim());
-                            if (nmeaData) {
-                                recordCount++;
-                                const jsonlLine = JSON.stringify(nmeaData);
-                                writeStream.write(jsonlLine + '\n');
-                            }
-                        }
-                        catch (error) {
-                            parseErrors++;
-                            console.error(`Error parsing NMEA line ${lineCount}:`, error);
-                        }
-                    }
-                    finally {
-                        _d = true;
-                    }
-                }
+            // ALWAYS use AI-assisted conversion for NMEA data, never use the default parser
+            console.log('Using AI-assisted conversion for NMEA data - bypassing default parser');
+            const aiResult = yield (0, aiService_1.aiAssistedConversion)(inputPath, outputPath, 'NMEA');
+            if (!aiResult.success) {
+                console.error(`AI-assisted NMEA conversion failed: ${aiResult.error}`);
+                throw new Error(`AI-assisted conversion failed: ${aiResult.error}`);
             }
-            catch (e_2_1) { e_2 = { error: e_2_1 }; }
-            finally {
-                try {
-                    if (!_d && !_a && (_b = rl_2.return)) yield _b.call(rl_2);
-                }
-                finally { if (e_2) throw e_2.error; }
-            }
-            writeStream.end();
-            console.log(`Processed ${lineCount} lines, created ${recordCount} records from NMEA file`);
-            // If we had a high error rate or few records, try AI-assisted parsing
-            const errorRate = parseErrors / lineCount;
-            if (errorRate > 0.2 || recordCount === 0) {
-                console.log('NMEA parsing had issues, trying AI-assisted parsing');
-                const aiSuccess = yield aiAssistedParsing(inputPath, outputPath, 'NMEA');
-                if (!aiSuccess) {
-                    console.log('AI-assisted parsing failed, using basic parsing results');
-                }
-            }
+            console.log('AI-assisted NMEA conversion completed successfully');
         }
         catch (error) {
             console.error('Error converting NMEA to JSONL:', error);
-            // Try AI-assisted parsing as a fallback
-            try {
-                console.log('Error in NMEA parsing, trying AI-assisted parsing');
-                const aiSuccess = yield aiAssistedParsing(inputPath, outputPath, 'NMEA');
-                if (!aiSuccess) {
-                    throw error; // Re-throw the original error if AI parsing also fails
-                }
-            }
-            catch (aiError) {
-                console.error('AI-assisted parsing also failed:', aiError);
-                throw error; // Throw the original error
-            }
+            throw error;
         }
     });
 }
@@ -638,12 +730,12 @@ function parseNmeaSentence(sentence) {
     try {
         // Use nmea-simple library for parsing
         const parsedSentence = nmeaSimple.parseNmeaSentence(sentence);
-        // Create standardized output
-        const timestamp = new Date().getTime(); // Default to current time
+        // Initialize result with original sentence data
         let result = {
-            timestamp_ms: timestamp,
+            timestamp_ms: null,
             type: 'NMEA',
-            message_type: parsedSentence.sentenceId
+            message_type: parsedSentence.sentenceId,
+            original_data: sentence
         };
         // Handle different message types
         switch (parsedSentence.sentenceId) {
@@ -655,6 +747,20 @@ function parseNmeaSentence(sentence) {
                 result.quality = gga.fixType;
                 result.num_satellites = gga.satellitesInView;
                 result.hdop = gga.horizontalDilution;
+                // Extract time from GGA
+                const timeValue = gga.time;
+                if (timeValue && typeof timeValue === 'string') {
+                    const today = new Date();
+                    const timeStr = timeValue;
+                    const hours = parseInt(timeStr.substring(0, 2));
+                    const minutes = parseInt(timeStr.substring(2, 4));
+                    const seconds = parseFloat(timeStr.substring(4));
+                    today.setUTCHours(hours);
+                    today.setUTCMinutes(minutes);
+                    today.setUTCSeconds(seconds);
+                    result.timestamp_ms = today.getTime();
+                    result.timestamp = today.toISOString(); // Add ISO string timestamp
+                }
                 break;
             }
             case 'RMC': {
@@ -663,6 +769,11 @@ function parseNmeaSentence(sentence) {
                 result.longitude = rmc.longitude;
                 result.speed = rmc.speedKnots * 0.514444; // Convert knots to m/s
                 result.course = rmc.trackTrue;
+                // Extract date and time from RMC
+                if (rmc.datetime) {
+                    result.timestamp_ms = rmc.datetime.getTime();
+                    result.timestamp = rmc.datetime.toISOString(); // Add ISO string timestamp
+                }
                 break;
             }
             case 'GSA': {
@@ -681,26 +792,34 @@ function parseNmeaSentence(sentence) {
                 result.satellite_data = gsv.satellites;
                 break;
             }
-            default:
-                // For other sentence types, include the raw data
-                result.raw_data = parsedSentence;
-                break;
+        }
+        // If we couldn't extract a timestamp, try to parse from the raw sentence
+        if (!result.timestamp_ms) {
+            const parts = sentence.split(',');
+            // For other sentence types, check if they have time field (typically the 2nd field)
+            if (parts.length >= 2 && parts[1] && parts[1].length >= 6) {
+                const timeStr = parts[1];
+                try {
+                    const hours = parseInt(timeStr.substring(0, 2));
+                    const minutes = parseInt(timeStr.substring(2, 4));
+                    const seconds = parseFloat(timeStr.substring(4));
+                    if (!isNaN(hours) && !isNaN(minutes) && !isNaN(seconds)) {
+                        const today = new Date();
+                        today.setUTCHours(hours, minutes, Math.floor(seconds), Math.round((seconds % 1) * 1000));
+                        result.timestamp_ms = today.getTime();
+                        result.timestamp = today.toISOString();
+                    }
+                }
+                catch (error) {
+                    console.error('Error parsing time from NMEA sentence:', error);
+                }
+            }
         }
         return result;
     }
     catch (error) {
         console.error('Error parsing NMEA sentence:', error);
-        // Fall back to basic parsing if nmea-simple fails
-        const messageBody = sentence.substring(1, checksumIndex);
-        const parts = messageBody.split(',');
-        const messageType = parts[0];
-        // Create a basic result with the message type
-        return {
-            timestamp_ms: new Date().getTime(),
-            type: 'NMEA',
-            message_type: messageType,
-            raw_data: parts.slice(1)
-        };
+        return null;
     }
 }
 // Convert NMEA coordinate format to decimal degrees
@@ -728,32 +847,27 @@ function convertNmeaCoordinate(coord, dir) {
 }
 // Detect file format based on content and convert
 function detectAndConvertToJsonl(inputPath, outputPath) {
-    var _a, e_3, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, e_2, _b, _c;
         // Read the first few lines to determine format
         const fileStream = fs_1.default.createReadStream(inputPath, { encoding: 'utf8', highWaterMark: 1024 });
         let content = '';
         try {
-            for (var _d = true, fileStream_1 = __asyncValues(fileStream), fileStream_1_1; fileStream_1_1 = yield fileStream_1.next(), _a = fileStream_1_1.done, !_a;) {
+            for (var _d = true, fileStream_1 = __asyncValues(fileStream), fileStream_1_1; fileStream_1_1 = yield fileStream_1.next(), _a = fileStream_1_1.done, !_a; _d = true) {
                 _c = fileStream_1_1.value;
                 _d = false;
-                try {
-                    const chunk = _c;
-                    content += chunk;
-                    if (content.length > 1000)
-                        break;
-                }
-                finally {
-                    _d = true;
-                }
+                const chunk = _c;
+                content += chunk;
+                if (content.length > 1000)
+                    break;
             }
         }
-        catch (e_3_1) { e_3 = { error: e_3_1 }; }
+        catch (e_2_1) { e_2 = { error: e_2_1 }; }
         finally {
             try {
                 if (!_d && !_a && (_b = fileStream_1.return)) yield _b.call(fileStream_1);
             }
-            finally { if (e_3) throw e_3.error; }
+            finally { if (e_2) throw e_2.error; }
         }
         // Try to determine format based on content
         if (content.includes('$GP') || content.includes('$GN') || content.includes('$GL')) {
@@ -824,8 +938,8 @@ function convertJsonToJsonl(inputPath, outputPath) {
 }
 // Basic conversion for unknown file formats
 function basicFileToJsonl(inputPath, outputPath) {
-    var _a, e_4, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, e_3, _b, _c;
         const writeStream = fs_1.default.createWriteStream(outputPath);
         try {
             const fileStream = fs_1.default.createReadStream(inputPath);
@@ -835,33 +949,28 @@ function basicFileToJsonl(inputPath, outputPath) {
             });
             let lineNumber = 0;
             try {
-                for (var _d = true, rl_3 = __asyncValues(rl), rl_3_1; rl_3_1 = yield rl_3.next(), _a = rl_3_1.done, !_a;) {
-                    _c = rl_3_1.value;
+                for (var _d = true, rl_2 = __asyncValues(rl), rl_2_1; rl_2_1 = yield rl_2.next(), _a = rl_2_1.done, !_a; _d = true) {
+                    _c = rl_2_1.value;
                     _d = false;
-                    try {
-                        const line = _c;
-                        lineNumber++;
-                        if (line.trim()) {
-                            const record = {
-                                timestamp_ms: new Date().getTime(),
-                                type: 'unknown',
-                                line_number: lineNumber,
-                                content: line.trim()
-                            };
-                            writeStream.write(JSON.stringify(record) + '\n');
-                        }
-                    }
-                    finally {
-                        _d = true;
+                    const line = _c;
+                    lineNumber++;
+                    if (line.trim()) {
+                        const record = {
+                            timestamp_ms: new Date().getTime(),
+                            type: 'unknown',
+                            line_number: lineNumber,
+                            content: line.trim()
+                        };
+                        writeStream.write(JSON.stringify(record) + '\n');
                     }
                 }
             }
-            catch (e_4_1) { e_4 = { error: e_4_1 }; }
+            catch (e_3_1) { e_3 = { error: e_3_1 }; }
             finally {
                 try {
-                    if (!_d && !_a && (_b = rl_3.return)) yield _b.call(rl_3);
+                    if (!_d && !_a && (_b = rl_2.return)) yield _b.call(rl_2);
                 }
-                finally { if (e_4) throw e_4.error; }
+                finally { if (e_3) throw e_3.error; }
             }
         }
         catch (error) {
@@ -875,11 +984,11 @@ function basicFileToJsonl(inputPath, outputPath) {
 }
 // Extract location data from JSONL
 function extractLocationData(inputPath, outputPath) {
-    var _a, e_5, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, e_4, _b, _c;
         console.log(`Extracting location data from ${inputPath}`);
-        const writeStream = fs_1.default.createWriteStream(outputPath);
         try {
+            const writeStream = fs_1.default.createWriteStream(outputPath);
             const fileStream = fs_1.default.createReadStream(inputPath);
             const rl = readline_1.default.createInterface({
                 input: fileStream,
@@ -887,158 +996,163 @@ function extractLocationData(inputPath, outputPath) {
             });
             let recordCount = 0;
             let extractedCount = 0;
+            let firstFewRecords = [];
             try {
-                for (var _d = true, rl_4 = __asyncValues(rl), rl_4_1; rl_4_1 = yield rl_4.next(), _a = rl_4_1.done, !_a;) {
-                    _c = rl_4_1.value;
+                for (var _d = true, rl_3 = __asyncValues(rl), rl_3_1; rl_3_1 = yield rl_3.next(), _a = rl_3_1.done, !_a; _d = true) {
+                    _c = rl_3_1.value;
                     _d = false;
+                    const line = _c;
                     try {
-                        const line = _c;
                         recordCount++;
-                        try {
-                            const record = JSON.parse(line);
-                            const locationData = extractLocationFromRecord(record);
-                            if (locationData) {
-                                extractedCount++;
-                                writeStream.write(JSON.stringify(locationData) + '\n');
+                        if (line.trim() === '')
+                            continue;
+                        const record = JSON.parse(line);
+                        // Keep track of the first few records for diagnostic purposes
+                        if (recordCount <= 5) {
+                            // Store record info for analysis
+                            firstFewRecords.push({
+                                record_number: recordCount,
+                                type: record.type || record.format || 'unknown',
+                                fields_present: Object.keys(record),
+                                has_coords: record.latitude !== undefined && record.longitude !== undefined
+                            });
+                        }
+                        // Log progress and analyze sample records
+                        if (recordCount % 1000 === 0 || recordCount <= 10) {
+                            const hasCoords = record.latitude !== undefined && record.longitude !== undefined;
+                            console.log(`${hasCoords ? 'Location data extracted from' : 'No location data extracted from'} record ${recordCount}: ${record.type || record.format || 'unknown'} has coordinates: ${hasCoords}`);
+                            if (!hasCoords && (recordCount <= 3 || recordCount % 5000 === 0)) {
+                                // Detailed logging of problematic records to diagnose conversion issues
+                                console.log(`Record #${recordCount} fields: ${Object.keys(record).join(', ')}`);
+                                // Check if this is a GGA or RMC sentence that should have coordinates
+                                if (record.original_data &&
+                                    (record.original_data.includes('GGA') || record.original_data.includes('RMC'))) {
+                                    console.log(`Record #${recordCount} contains GGA/RMC data but coordinates weren't extracted`);
+                                    console.log(`Original data: ${record.original_data}`);
+                                }
                             }
                         }
-                        catch (error) {
-                            console.error(`Error parsing line ${recordCount}:`, error);
+                        // Extract location from the record
+                        const locationData = extractLocationFromRecord(record);
+                        if (locationData &&
+                            locationData.latitude !== undefined &&
+                            locationData.longitude !== undefined &&
+                            !isNaN(locationData.latitude) &&
+                            !isNaN(locationData.longitude)) {
+                            writeStream.write(JSON.stringify(locationData) + '\n');
+                            extractedCount++;
                         }
                     }
-                    finally {
-                        _d = true;
+                    catch (error) {
+                        console.error(`Error processing record ${recordCount}:`, error);
                     }
                 }
             }
-            catch (e_5_1) { e_5 = { error: e_5_1 }; }
+            catch (e_4_1) { e_4 = { error: e_4_1 }; }
             finally {
                 try {
-                    if (!_d && !_a && (_b = rl_4.return)) yield _b.call(rl_4);
+                    if (!_d && !_a && (_b = rl_3.return)) yield _b.call(rl_3);
                 }
-                finally { if (e_5) throw e_5.error; }
+                finally { if (e_4) throw e_4.error; }
+            }
+            writeStream.end();
+            // Print summary of first few records for analysis
+            console.log('JSONL Record Analysis: First few records:', JSON.stringify(firstFewRecords, null, 2));
+            // Diagnose extraction issues
+            if (extractedCount === 0) {
+                console.warn('WARNING: No location data was extracted - analyzing records to diagnose issue');
+                // Check first few records to understand the data structure
+                for (let i = 1; i <= 3; i++) {
+                    try {
+                        const content = fs_1.default.readFileSync(inputPath, 'utf8');
+                        const lines = content.split('\n');
+                        if (lines.length >= i) {
+                            const recordData = JSON.parse(lines[i - 1]);
+                            console.log(`Record #${i} of type ${recordData.type || recordData.format || 'unknown'} has keys: ${Object.keys(recordData).join(', ')}`);
+                            // Check for GGA or RMC data that should have coordinates
+                            if (recordData.original_data &&
+                                (recordData.original_data.includes('GGA') || recordData.original_data.includes('RMC'))) {
+                                console.log(`Record #${i} contains GGA/RMC data that should have coordinates:`);
+                                console.log(`Original data: ${recordData.original_data}`);
+                                // Try to manually extract coordinates from the data
+                                try {
+                                    const parts = recordData.original_data.split(',');
+                                    let lat, latDir, lon, lonDir;
+                                    if (recordData.original_data.includes('GGA')) {
+                                        // GGA format: $--GGA,time,lat,N/S,lon,E/W,...
+                                        lat = parts[2];
+                                        latDir = parts[3];
+                                        lon = parts[4];
+                                        lonDir = parts[5];
+                                        console.log(`GGA coords: lat=${lat} ${latDir}, lon=${lon} ${lonDir}`);
+                                    }
+                                    else if (recordData.original_data.includes('RMC')) {
+                                        // RMC format: $--RMC,time,status,lat,N/S,lon,E/W,...
+                                        lat = parts[3];
+                                        latDir = parts[4];
+                                        lon = parts[5];
+                                        lonDir = parts[6];
+                                        console.log(`RMC coords: lat=${lat} ${latDir}, lon=${lon} ${lonDir}`);
+                                    }
+                                }
+                                catch (parseError) {
+                                    console.error('Error parsing NMEA coordinates:', parseError);
+                                }
+                            }
+                        }
+                    }
+                    catch (error) {
+                        console.error(`Error analyzing record ${i}:`, error);
+                    }
+                }
+                console.log('Check if the AI-assisted conversion extracted and formatted latitude/longitude correctly.');
+                console.log('Consider modifying the createConversionPrompt to emphasize coordinate extraction and formatting.');
             }
             console.log(`Processed ${recordCount} records, extracted ${extractedCount} location records`);
         }
         catch (error) {
-            console.error('Error extracting location data:', error);
+            console.error(`Error extracting location data:`, error);
             throw error;
-        }
-        finally {
-            writeStream.end();
         }
     });
 }
 // Extract location from a JSONL record
 function extractLocationFromRecord(record) {
-    if (!record || typeof record !== 'object') {
+    var _a;
+    // Check if the record has valid location data directly provided
+    const hasValidCoords = record &&
+        typeof record === 'object' &&
+        'latitude' in record &&
+        'longitude' in record &&
+        typeof record.latitude === 'number' &&
+        typeof record.longitude === 'number' &&
+        !isNaN(record.latitude) &&
+        !isNaN(record.longitude) &&
+        record.latitude >= -90 &&
+        record.latitude <= 90 &&
+        record.longitude >= -180 &&
+        record.longitude <= 180;
+    if (!hasValidCoords) {
+        // If coordinates are not directly present and valid, return null.
+        // We rely on the aiAssistedConversion step (using the LLM prompt)
+        // to have already extracted coordinates into top-level fields.
         return null;
     }
-    const timestamp = record.timestamp_ms || new Date().getTime();
-    let result = {
-        timestamp_ms: timestamp
+    // Record has valid coordinates, return a clean location record
+    // Ensure timestamp_ms is present, otherwise use fallback or null
+    const timestamp_ms = record.timestamp_ms || record.time_unix || null;
+    return {
+        type: record.type || 'gnss',
+        timestamp_ms: timestamp_ms,
+        timestamp: timestamp_ms ? new Date(timestamp_ms).toISOString() : (record.timestamp || null),
+        latitude: record.latitude,
+        longitude: record.longitude,
+        altitude: record.altitude || ((_a = record.position_lla) === null || _a === void 0 ? void 0 : _a.altitude_m) || null,
+        speed: record.speed || null,
+        course: record.course || null,
+        hdop: record.hdop || record.dop || null,
+        original_record: record.original_data || null // Keep for potential debugging
     };
-    // Check record type
-    if (record.type === 'NMEA') {
-        // Extract from NMEA record
-        if (record.message_type === 'GGA' || record.message_type === 'RMC') {
-            if (record.latitude !== undefined && record.longitude !== undefined) {
-                result.latitude = record.latitude;
-                result.longitude = record.longitude;
-                if (record.altitude !== undefined) {
-                    result.altitude = record.altitude;
-                }
-                if (record.quality !== undefined) {
-                    result.quality = record.quality;
-                }
-                if (record.hdop !== undefined) {
-                    result.hdop = record.hdop;
-                }
-                if (record.num_satellites !== undefined) {
-                    result.num_satellites = record.num_satellites;
-                }
-                if (record.speed !== undefined) {
-                    result.speed = record.speed;
-                }
-                if (record.course !== undefined) {
-                    result.course = record.course;
-                }
-                return result;
-            }
-        }
-    }
-    else if (record.type === 'RINEX') {
-        // Extract from RINEX record
-        if (record.data && typeof record.data === 'object') {
-            // Count satellites
-            const numSatellites = Object.keys(record.data).length;
-            // For RINEX, we don't have direct position, just create a record with satellite count
-            result.data_type = 'RINEX';
-            result.num_satellites = numSatellites;
-            return result;
-        }
-    }
-    else if (record.type === 'UBX') {
-        // Extract from UBX record
-        if (record.latitude !== undefined && record.longitude !== undefined) {
-            result.latitude = record.latitude;
-            result.longitude = record.longitude;
-            if (record.altitude !== undefined) {
-                result.altitude = record.altitude;
-            }
-            if (record.num_satellites !== undefined) {
-                result.num_satellites = record.num_satellites;
-            }
-            if (record.h_accuracy !== undefined) {
-                result.h_accuracy = record.h_accuracy;
-            }
-            if (record.v_accuracy !== undefined) {
-                result.v_accuracy = record.v_accuracy;
-            }
-            if (record.speed !== undefined) {
-                result.speed = record.speed;
-            }
-            if (record.heading !== undefined) {
-                result.heading = record.heading;
-            }
-            if (record.pdop !== undefined) {
-                result.pdop = record.pdop;
-            }
-            if (record.fix_type !== undefined) {
-                result.fix_type = record.fix_type;
-            }
-            return result;
-        }
-    }
-    else {
-        // Try to extract from unknown format
-        if (record.latitude !== undefined && record.longitude !== undefined) {
-            result.latitude = record.latitude;
-            result.longitude = record.longitude;
-            if (record.altitude !== undefined) {
-                result.altitude = record.altitude;
-            }
-            return result;
-        }
-        else if (record.lat !== undefined && record.lon !== undefined) {
-            result.latitude = record.lat;
-            result.longitude = record.lon;
-            if (record.alt !== undefined) {
-                result.altitude = record.alt;
-            }
-            return result;
-        }
-        else if (record.data && record.data.lat !== undefined && record.data.lon !== undefined) {
-            result.latitude = record.data.lat;
-            result.longitude = record.data.lon;
-            if (record.data.alt !== undefined) {
-                result.altitude = record.data.alt;
-            }
-            return result;
-        }
-    }
-    // No location data found
-    return null;
 }
 // Convert UBX format to JSONL
 function convertUbxToJsonl(inputPath, outputPath) {
@@ -1159,8 +1273,28 @@ function aiAssistedParsing(inputPath, outputPath, format) {
             else if (fileName.includes('imu') || fileName.includes('ins')) {
                 dataType = 'imu';
             }
-            // Integrate with our new aiService, specifying this is a raw file (true as third parameter)
+            // For NMEA files, always use the format directly as NMEA - this ensures we get NMEA-specific handling
+            if (format === 'NMEA') {
+                console.log('NMEA file detected - using dedicated NMEA processing');
+                console.log(`\n========== FIRST LLM: NMEA FORMAT CONVERSION ==========\n`);
+                const conversionResult = yield (0, aiService_1.aiAssistedConversion)(inputPath, outputPath, 'NMEA');
+                console.log(`\n========== FIRST LLM COMPLETE ==========\n`);
+                if (conversionResult.success && conversionResult.output_path) {
+                    // If AI conversion succeeded, copy the result to the expected output path if needed
+                    if (conversionResult.output_path !== outputPath) {
+                        fs_1.default.copyFileSync(conversionResult.output_path, outputPath);
+                    }
+                    return true;
+                }
+                // For NMEA files, we don't want to fall back to basic parsing
+                console.log(`AI-assisted parsing for NMEA was not successful`);
+                console.log(`Error: ${conversionResult.error}`);
+                return false;
+            }
+            // Non-NMEA file processing
+            console.log(`\n========== FIRST LLM: ${dataType.toUpperCase()} FORMAT CONVERSION ==========\n`);
             const conversionResult = yield (0, aiService_1.aiAssistedConversion)(inputPath, outputPath, dataType);
+            console.log(`\n========== FIRST LLM COMPLETE ==========\n`);
             if (conversionResult.success && conversionResult.output_path) {
                 // If AI conversion succeeded, copy the result to the expected output path
                 fs_1.default.copyFileSync(conversionResult.output_path, outputPath);
@@ -1179,8 +1313,8 @@ function aiAssistedParsing(inputPath, outputPath, format) {
 }
 // Validate standardized location data
 function validateLocationData(inputPath) {
-    var _a, e_6, _b, _c;
     return __awaiter(this, void 0, void 0, function* () {
+        var _a, e_5, _b, _c;
         console.log(`Validating location data in ${inputPath}`);
         const issues = [];
         let recordCount = 0;
@@ -1193,89 +1327,84 @@ function validateLocationData(inputPath) {
             });
             let prevTimestamp = null;
             try {
-                for (var _d = true, rl_5 = __asyncValues(rl), rl_5_1; rl_5_1 = yield rl_5.next(), _a = rl_5_1.done, !_a;) {
-                    _c = rl_5_1.value;
+                for (var _d = true, rl_4 = __asyncValues(rl), rl_4_1; rl_4_1 = yield rl_4.next(), _a = rl_4_1.done, !_a; _d = true) {
+                    _c = rl_4_1.value;
                     _d = false;
+                    const line = _c;
+                    recordCount++;
                     try {
-                        const line = _c;
-                        recordCount++;
-                        try {
-                            const record = JSON.parse(line);
-                            // Check required fields
-                            if (!record.timestamp_ms) {
-                                issues.push(`Record ${recordCount}: Missing timestamp`);
+                        const record = JSON.parse(line);
+                        // Check required fields
+                        if (!record.timestamp_ms) {
+                            issues.push(`Record ${recordCount}: Missing timestamp`);
+                            continue;
+                        }
+                        // Validate timestamp
+                        if (typeof record.timestamp_ms !== 'number' || isNaN(record.timestamp_ms)) {
+                            issues.push(`Record ${recordCount}: Invalid timestamp format`);
+                            continue;
+                        }
+                        // Check timestamp sequence
+                        if (prevTimestamp !== null && record.timestamp_ms < prevTimestamp) {
+                            issues.push(`Record ${recordCount}: Timestamp out of sequence`);
+                        }
+                        prevTimestamp = record.timestamp_ms;
+                        // Validate coordinates if present
+                        if (record.latitude !== undefined && record.longitude !== undefined) {
+                            // Check latitude range (-90 to 90)
+                            if (typeof record.latitude !== 'number' ||
+                                isNaN(record.latitude) ||
+                                record.latitude < -90 ||
+                                record.latitude > 90) {
+                                issues.push(`Record ${recordCount}: Invalid latitude value ${record.latitude}`);
                                 continue;
                             }
-                            // Validate timestamp
-                            if (typeof record.timestamp_ms !== 'number' || isNaN(record.timestamp_ms)) {
-                                issues.push(`Record ${recordCount}: Invalid timestamp format`);
+                            // Check longitude range (-180 to 180)
+                            if (typeof record.longitude !== 'number' ||
+                                isNaN(record.longitude) ||
+                                record.longitude < -180 ||
+                                record.longitude > 180) {
+                                issues.push(`Record ${recordCount}: Invalid longitude value ${record.longitude}`);
                                 continue;
                             }
-                            // Check timestamp sequence
-                            if (prevTimestamp !== null && record.timestamp_ms < prevTimestamp) {
-                                issues.push(`Record ${recordCount}: Timestamp out of sequence`);
-                            }
-                            prevTimestamp = record.timestamp_ms;
-                            // Validate coordinates if present
-                            if (record.latitude !== undefined && record.longitude !== undefined) {
-                                // Check latitude range (-90 to 90)
-                                if (typeof record.latitude !== 'number' ||
-                                    isNaN(record.latitude) ||
-                                    record.latitude < -90 ||
-                                    record.latitude > 90) {
-                                    issues.push(`Record ${recordCount}: Invalid latitude value ${record.latitude}`);
-                                    continue;
-                                }
-                                // Check longitude range (-180 to 180)
-                                if (typeof record.longitude !== 'number' ||
-                                    isNaN(record.longitude) ||
-                                    record.longitude < -180 ||
-                                    record.longitude > 180) {
-                                    issues.push(`Record ${recordCount}: Invalid longitude value ${record.longitude}`);
-                                    continue;
-                                }
-                            }
-                            // Validate altitude if present
-                            if (record.altitude !== undefined) {
-                                if (typeof record.altitude !== 'number' || isNaN(record.altitude)) {
-                                    issues.push(`Record ${recordCount}: Invalid altitude value ${record.altitude}`);
-                                    continue;
-                                }
-                            }
-                            // Validate num_satellites if present
-                            if (record.num_satellites !== undefined) {
-                                if (typeof record.num_satellites !== 'number' ||
-                                    !Number.isInteger(record.num_satellites) ||
-                                    record.num_satellites < 0) {
-                                    issues.push(`Record ${recordCount}: Invalid num_satellites value ${record.num_satellites}`);
-                                    continue;
-                                }
-                            }
-                            // Validate hdop if present
-                            if (record.hdop !== undefined) {
-                                if (typeof record.hdop !== 'number' || isNaN(record.hdop) || record.hdop < 0) {
-                                    issues.push(`Record ${recordCount}: Invalid hdop value ${record.hdop}`);
-                                    continue;
-                                }
-                            }
-                            // Record is valid
-                            validRecordCount++;
                         }
-                        catch (error) {
-                            issues.push(`Record ${recordCount}: Invalid JSON format`);
+                        // Validate altitude if present
+                        if (record.altitude !== undefined) {
+                            if (typeof record.altitude !== 'number' || isNaN(record.altitude)) {
+                                issues.push(`Record ${recordCount}: Invalid altitude value ${record.altitude}`);
+                                continue;
+                            }
                         }
+                        // Validate num_satellites if present
+                        if (record.num_satellites !== undefined) {
+                            if (typeof record.num_satellites !== 'number' ||
+                                !Number.isInteger(record.num_satellites) ||
+                                record.num_satellites < 0) {
+                                issues.push(`Record ${recordCount}: Invalid num_satellites value ${record.num_satellites}`);
+                                continue;
+                            }
+                        }
+                        // Validate hdop if present
+                        if (record.hdop !== undefined) {
+                            if (typeof record.hdop !== 'number' || isNaN(record.hdop) || record.hdop < 0) {
+                                issues.push(`Record ${recordCount}: Invalid hdop value ${record.hdop}`);
+                                continue;
+                            }
+                        }
+                        // Record is valid
+                        validRecordCount++;
                     }
-                    finally {
-                        _d = true;
+                    catch (error) {
+                        issues.push(`Record ${recordCount}: Invalid JSON format`);
                     }
                 }
             }
-            catch (e_6_1) { e_6 = { error: e_6_1 }; }
+            catch (e_5_1) { e_5 = { error: e_5_1 }; }
             finally {
                 try {
-                    if (!_d && !_a && (_b = rl_5.return)) yield _b.call(rl_5);
+                    if (!_d && !_a && (_b = rl_4.return)) yield _b.call(rl_4);
                 }
-                finally { if (e_6) throw e_6.error; }
+                finally { if (e_5) throw e_5.error; }
             }
             console.log(`Validated ${recordCount} records, found ${validRecordCount} valid records and ${issues.length} issues`);
             return {

@@ -15,13 +15,23 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -48,22 +58,29 @@ const resultsContainer = process.env.AZURE_STORAGE_CONTAINER_RESULTS || 'results
 exports.fileController = {
     // Upload files (GNSS and/or IMU) and start processing
     uploadFile: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-        var _a, _b;
+        var _a, _b, _c, _d;
         try {
             const files = req.files;
             if (!files || ((!files.gnssFile || files.gnssFile.length === 0) &&
                 (!files.imuFile || files.imuFile.length === 0))) {
                 return res.status(400).json({ error: 'No files uploaded. Please upload at least one GNSS or IMU file.' });
             }
-            const gnssFile = (_a = files.gnssFile) === null || _a === void 0 ? void 0 : _a[0];
-            const imuFile = (_b = files.imuFile) === null || _b === void 0 ? void 0 : _b[0];
+            // Get user ID for file tracking
+            const userId = ((_a = req.user) === null || _a === void 0 ? void 0 : _a.id) || 'anonymous';
+            const userEmail = ((_b = req.user) === null || _b === void 0 ? void 0 : _b.email) || 'anonymous';
+            const metadata = {
+                userId,
+                uploadedBy: userEmail
+            };
+            const gnssFile = (_c = files.gnssFile) === null || _c === void 0 ? void 0 : _c[0];
+            const imuFile = (_d = files.imuFile) === null || _d === void 0 ? void 0 : _d[0];
             // Upload files to Azure Blob Storage if they exist
             let gnssFileUrl, imuFileUrl;
             if (gnssFile) {
-                gnssFileUrl = yield blobStorageService.uploadFile(gnssFile.path, gnssFile.filename, uploadsContainer);
+                gnssFileUrl = yield blobStorageService.uploadFile(gnssFile.path, gnssFile.filename, uploadsContainer, metadata);
             }
             if (imuFile) {
-                imuFileUrl = yield blobStorageService.uploadFile(imuFile.path, imuFile.filename, uploadsContainer);
+                imuFileUrl = yield blobStorageService.uploadFile(imuFile.path, imuFile.filename, uploadsContainer, metadata);
             }
             // Start processing the file(s)
             const jobId = yield fileProcessingService_1.fileProcessingService.processFiles({
@@ -78,7 +95,9 @@ exports.fileController = {
                     filename: imuFile.filename,
                     path: imuFile.path,
                     url: imuFileUrl
-                } : undefined
+                } : undefined,
+                userId,
+                userEmail
             });
             res.status(200).json({
                 message: 'Files uploaded successfully',
@@ -173,18 +192,31 @@ exports.fileController = {
     // List all files in the uploads directory
     listFiles: (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         try {
+            console.log('Files requested - bypassing all filters for debugging');
             // Get files from all containers
             const [uploadFiles, processedFiles, resultFiles] = yield Promise.all([
                 blobStorageService.listFiles(uploadsContainer),
                 blobStorageService.listFiles(processedContainer),
                 blobStorageService.listFiles(resultsContainer)
             ]);
+            console.log(`Found files: Uploads: ${uploadFiles.length}, Processed: ${processedFiles.length}, Results: ${resultFiles.length}`);
             // Combine files from all containers
             const combinedFiles = [
-                ...uploadFiles.map(file => (Object.assign(Object.assign({}, file), { filename: file.name, container: uploadsContainer, size: file.properties.contentLength || 0, createdAt: file.properties.createdOn || new Date() }))),
-                ...processedFiles.map(file => (Object.assign(Object.assign({}, file), { filename: file.name, container: processedContainer, size: file.properties.contentLength || 0, createdAt: file.properties.createdOn || new Date() }))),
-                ...resultFiles.map(file => (Object.assign(Object.assign({}, file), { filename: file.name, container: resultsContainer, size: file.properties.contentLength || 0, createdAt: file.properties.createdOn || new Date() })))
+                ...uploadFiles.map(file => {
+                    var _a;
+                    return (Object.assign(Object.assign({}, file), { filename: file.name, container: uploadsContainer, size: file.properties.contentLength || 0, createdAt: file.properties.createdOn || new Date(), userId: ((_a = file.properties.metadata) === null || _a === void 0 ? void 0 : _a.userId) || 'anonymous', debug: true }));
+                }),
+                ...processedFiles.map(file => {
+                    var _a;
+                    return (Object.assign(Object.assign({}, file), { filename: file.name, container: processedContainer, size: file.properties.contentLength || 0, createdAt: file.properties.createdOn || new Date(), userId: ((_a = file.properties.metadata) === null || _a === void 0 ? void 0 : _a.userId) || 'anonymous', debug: true }));
+                }),
+                ...resultFiles.map(file => {
+                    var _a;
+                    return (Object.assign(Object.assign({}, file), { filename: file.name, container: resultsContainer, size: file.properties.contentLength || 0, createdAt: file.properties.createdOn || new Date(), userId: ((_a = file.properties.metadata) === null || _a === void 0 ? void 0 : _a.userId) || 'anonymous', debug: true }));
+                })
             ];
+            // FOR DEBUGGING: Return all files without filtering
+            console.log(`Returning all ${combinedFiles.length} files for debugging`);
             res.status(200).json(combinedFiles);
         }
         catch (error) {

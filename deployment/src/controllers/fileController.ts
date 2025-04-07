@@ -2,16 +2,7 @@ import { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileProcessingService } from '../services/fileProcessingService';
-import * as blobStorageService from '../services/blobStorageService';
-import dotenv from 'dotenv';
-
-// Load environment variables
-dotenv.config();
-
-// Get container names from environment variables
-const uploadsContainer = process.env.AZURE_STORAGE_CONTAINER_UPLOADS || 'uploads';
-const processedContainer = process.env.AZURE_STORAGE_CONTAINER_PROCESSED || 'processed';
-const resultsContainer = process.env.AZURE_STORAGE_CONTAINER_RESULTS || 'results';
+import { blobStorageService } from '../services/blobStorageService';
 
 export const fileController = {
   // Upload files (GNSS and/or IMU) and start processing
@@ -24,14 +15,6 @@ export const fileController = {
         return res.status(400).json({ error: 'No files uploaded. Please upload at least one GNSS or IMU file.' });
       }
 
-      // Get user ID for file tracking
-      const userId = req.user?.id || 'anonymous';
-      const userEmail = req.user?.email || 'anonymous';
-      const metadata = { 
-        userId,
-        uploadedBy: userEmail
-      };
-
       const gnssFile = files.gnssFile?.[0];
       const imuFile = files.imuFile?.[0];
       
@@ -42,8 +25,7 @@ export const fileController = {
         gnssFileUrl = await blobStorageService.uploadFile(
           gnssFile.path,
           gnssFile.filename,
-          uploadsContainer,
-          metadata
+          blobStorageService.containers.uploads
         );
       }
       
@@ -51,8 +33,7 @@ export const fileController = {
         imuFileUrl = await blobStorageService.uploadFile(
           imuFile.path,
           imuFile.filename,
-          uploadsContainer,
-          metadata
+          blobStorageService.containers.uploads
         );
       }
       
@@ -69,9 +50,7 @@ export const fileController = {
           filename: imuFile.filename,
           path: imuFile.path,
           url: imuFileUrl
-        } : undefined,
-        userId,
-        userEmail
+        } : undefined
       });
       
       res.status(200).json({
@@ -117,51 +96,47 @@ export const fileController = {
     try {
       const { filename } = req.params;
       
-      console.log(`Download request for file: ${filename}`);
-      
       // Try to find the file in each container
-      let foundFile = false;
+      let containerName;
       
       // Check if file exists in any container and stream it
       try {
         console.log(`Attempting to download file: ${filename} from uploads container`);
-        await blobStorageService.streamToResponse(filename, res, uploadsContainer);
-        console.log(`Successfully streamed file: ${filename} from uploads container`);
-        foundFile = true;
+        await blobStorageService.streamToResponse(filename, res, blobStorageService.containers.uploads);
         return;
       } catch (error) {
         console.log(`File ${filename} not found in uploads container, trying processed container...`);
       }
       
-      if (!foundFile) {
-        try {
-          console.log(`Attempting to download file: ${filename} from processed container`);
-          await blobStorageService.streamToResponse(filename, res, processedContainer);
-          console.log(`Successfully streamed file: ${filename} from processed container`);
-          foundFile = true;
-          return;
-        } catch (error) {
-          console.log(`File ${filename} not found in processed container, trying results container...`);
-        }
+      try {
+        console.log(`Attempting to download file: ${filename} from processed container`);
+        await blobStorageService.streamToResponse(filename, res, blobStorageService.containers.processed);
+        return;
+      } catch (error) {
+        console.log(`File ${filename} not found in processed container, trying results container...`);
       }
       
-      if (!foundFile) {
-        try {
-          console.log(`Attempting to download file: ${filename} from results container`);
-          await blobStorageService.streamToResponse(filename, res, resultsContainer);
-          console.log(`Successfully streamed file: ${filename} from results container`);
-          foundFile = true;
-          return;
-        } catch (error) {
-          console.log(`File ${filename} not found in results container either`);
-        }
-      }
-      
-      // If we reach here, we couldn't find the file in any container
-      if (!foundFile) {
+      try {
+        console.log(`Attempting to download file: ${filename} from results container`);
+        await blobStorageService.streamToResponse(filename, res, blobStorageService.containers.results);
+        return;
+      } catch (error) {
+        // If we get here, the file wasn't found in any container
         console.log(`File ${filename} not found in any container`);
-        res.status(404).json({ error: `File ${filename} not found` });
+        
+        // Try local filesystem as fallback
+        const uploadsDir = path.resolve(__dirname, '../../uploads');
+        const filePath = path.join(uploadsDir, filename);
+        
+        if (fs.existsSync(filePath)) {
+          console.log(`File found in local filesystem: ${filePath}`);
+          return res.download(filePath);
+        }
+        
+        // File not found anywhere
+        return res.status(404).json({ error: 'File not found' });
       }
+      
     } catch (error) {
       console.error('Error downloading file:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to download file';
@@ -172,50 +147,38 @@ export const fileController = {
   // List all files in the uploads directory
   listFiles: async (req: Request, res: Response) => {
     try {
-      console.log('Files requested - bypassing all filters for debugging');
-      
       // Get files from all containers
       const [uploadFiles, processedFiles, resultFiles] = await Promise.all([
-        blobStorageService.listFiles(uploadsContainer),
-        blobStorageService.listFiles(processedContainer),
-        blobStorageService.listFiles(resultsContainer)
+        blobStorageService.listFiles(blobStorageService.containers.uploads),
+        blobStorageService.listFiles(blobStorageService.containers.processed),
+        blobStorageService.listFiles(blobStorageService.containers.results)
       ]);
-      
-      console.log(`Found files: Uploads: ${uploadFiles.length}, Processed: ${processedFiles.length}, Results: ${resultFiles.length}`);
       
       // Combine files from all containers
       const combinedFiles = [
         ...uploadFiles.map(file => ({
           ...file,
           filename: file.name,
-          container: uploadsContainer,
+          container: blobStorageService.containers.uploads,
           size: file.properties.contentLength || 0,
-          createdAt: file.properties.createdOn || new Date(),
-          userId: file.properties.metadata?.userId || 'anonymous',
-          debug: true
+          createdAt: file.properties.createdOn || new Date()
         })),
         ...processedFiles.map(file => ({
           ...file,
           filename: file.name,
-          container: processedContainer,
+          container: blobStorageService.containers.processed,
           size: file.properties.contentLength || 0,
-          createdAt: file.properties.createdOn || new Date(),
-          userId: file.properties.metadata?.userId || 'anonymous',
-          debug: true
+          createdAt: file.properties.createdOn || new Date()
         })),
         ...resultFiles.map(file => ({
           ...file,
           filename: file.name,
-          container: resultsContainer,
+          container: blobStorageService.containers.results,
           size: file.properties.contentLength || 0,
-          createdAt: file.properties.createdOn || new Date(),
-          userId: file.properties.metadata?.userId || 'anonymous',
-          debug: true
+          createdAt: file.properties.createdOn || new Date()
         }))
       ];
       
-      // FOR DEBUGGING: Return all files without filtering
-      console.log(`Returning all ${combinedFiles.length} files for debugging`);
       res.status(200).json(combinedFiles);
     } catch (error) {
       console.error('Error listing files:', error);
@@ -231,9 +194,9 @@ export const fileController = {
       
       // Delete all files from all containers
       const [uploadsCount, processedCount, resultsCount] = await Promise.all([
-        blobStorageService.clearContainer(uploadsContainer),
-        blobStorageService.clearContainer(processedContainer),
-        blobStorageService.clearContainer(resultsContainer)
+        blobStorageService.clearContainer(blobStorageService.containers.uploads),
+        blobStorageService.clearContainer(blobStorageService.containers.processed),
+        blobStorageService.clearContainer(blobStorageService.containers.results)
       ]);
       
       const totalCount = uploadsCount + processedCount + resultsCount;

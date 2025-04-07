@@ -1,9 +1,9 @@
 # FusionFly: GNSS+IMU Data Fusion System
 
-![FusionFly](https://img.shields.io/badge/FusionFly-v1.0.0-4a90e2?style=for-the-badge&logo=appveyor)
-[![FusionFly Wiki](https://img.shields.io/badge/Documentation-Wiki-6caa5f?style=for-the-badge&logo=github)](https://github.com/Thorkee/FusionFly/wiki)
-![React](https://img.shields.io/badge/React-18.x-61dafb?style=for-the-badge&logo=react&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d?style=for-the-badge&logo=node.js&logoColor=white)
+![FusionFly](https://img.shields.io/badge/FusionFly-1.0.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![React](https://img.shields.io/badge/React-18.x-61dafb)
+![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d)
 
 FusionFly is an open-source toolkit for processing and fusing GNSS (Global Navigation Satellite System) and IMU (Inertial Measurement Unit) data with Factor Graph Optimization (FGO). The system provides a modern web interface for uploading, processing, visualizing, and downloading standardized navigation data.           
 ## System Architecture
@@ -72,52 +72,6 @@ FusionFly processes data through a standardization pipeline:
    - Executes the generated conversion code automatically in the backend
    - Provides detailed error information to improve subsequent attempts
 
-### LLM Robustness Features
-
-FusionFly implements robust validation and fallback mechanisms for each LLM step in the AI-assisted conversion pipeline:
-
-#### Format Conversion (First LLM)
-- **Validation**: Specialized validator checks that output conforms to expected JSONL format with required fields
-- **Fallback Mechanism**: 
-  - When conversion produces invalid output, the system captures specific errors (missing fields, invalid JSON, etc.)
-  - Error details are fed back to the LLM in a structured format for improved retry
-  - The LLM is instructed to fix specific issues in its subsequent attempt
-  - System makes up to 3 attempts with increasingly detailed error feedback
-
-#### Location Extraction (Second LLM)
-- **Validation**: Validates coordinates (latitude/longitude in correct ranges), timestamps, and required field presence
-- **Fallback Mechanism**:
-  - Detects missing or invalid location data in extraction output
-  - Provides field-specific guidance to the LLM about conversion issues
-  - Includes examples of proper formatting in error feedback
-  - Retries with progressive reinforcement learning pattern
-
-#### Schema Conversion (Third LLM)
-- **Validation**: Ensures strict conformance to target schema structure with proper nesting and field types
-- **Fallback Mechanism**:
-  - Validates against a formal schema definition
-  - For GNSS data: Validates position_lla structure with latitude_deg, longitude_deg, and altitude_m fields
-  - For IMU data: Validates quaternion orientation and acceleration vectors
-  - Feeds schema violations back to the LLM with structural correction instructions
-
-#### Unit Testing
-- Comprehensive test suite covers each LLM step with:
-  - Happy path tests with valid inputs and expected outputs
-  - Error handling tests with malformed inputs
-  - Edge case tests (empty files, missing fields, etc.)
-  - API error simulation and recovery tests
-  - Validation and fallback mechanism tests
-
-#### Error Feedback Loop
-- The entire pipeline implements a closed feedback loop where:
-  - Each step validates the output of the previous step
-  - Validation errors are captured in detail
-  - Structured error information guides the next LLM attempt
-  - System learns from previous failures to improve conversion quality
-  - Detailed logs are maintained for debugging and improvement
-
-This multi-layer validation and fallback approach ensures robust processing even with challenging or unusual data formats, significantly improving the reliability of the AI-assisted conversion pipeline.
-
 4. **Conversion Validation**
    - Runs comprehensive unit tests on the converted data
    - Validates correct JSONL formatting and data integrity
@@ -159,17 +113,17 @@ FusionFly processes data through a well-defined pipeline:
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                     │
 │  Supported Input Formats                │  Output Formats                           │
-│  ─────────────────────                  │  ─────────────────                        │
-│  GNSS:                                  │  Standardized JSONL                       │
-│  - RINEX (.obs, .rnx, .21o)             │  Location Data                            │
-│  - NMEA (.nmea, .gps, .txt)             │  Trajectory Visualization                 │
-│  - UBX (binary)                         │  Validation Reports                       │
-│  - JSON, CSV                            │                                           │
-│                                         │                                           │
-│  IMU:                                   │                                           │
-│  - Raw IMU data (.imu)                  │                                           │
-│  - CSV, JSON, TXT                       │                                           │
-│                                         │                                           │
+│  ─────────────────────                 │  ─────────────────                        │
+│  GNSS:                                 │  Standardized JSONL                        │
+│  - RINEX (.obs, .rnx, .21o)            │  Location Data                             │
+│  - NMEA (.nmea, .gps, .txt)            │  Trajectory Visualization                  │
+│  - UBX (binary)                        │  Validation Reports                        │
+│  - JSON, CSV                           │                                            │
+│                                        │                                            │
+│  IMU:                                  │                                            │
+│  - Raw IMU data (.imu)                 │                                            │
+│  - CSV, JSON, TXT                      │                                            │
+│                                        │                                            │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -277,17 +231,13 @@ Benefits of FGO:
 - Node.js (v16+)
 - npm or yarn
 - Redis server
-- For production deployment: 
-  - Azure Cosmos DB account
-  - Azure Blob Storage account
-  - Vercel account (optional)
 
 ### Installation
 
 1. Clone the repository:
    ```
-   git clone https://github.com/Thorkee/FusionFly.git
-   cd FusionFly
+   git clone https://github.com/Thorkee/LLMFGO.git
+   cd LLMFGO
    ```
 
 2. Install dependencies:
@@ -297,7 +247,7 @@ Benefits of FGO:
 
 3. Set up environment:
    ```
-   cp backend/.env.example backend/.env
+   cp .env.example .env
    # Edit .env with your configuration
    ```
 
@@ -305,36 +255,6 @@ Benefits of FGO:
    ```
    npm run dev
    ```
-
-## Deployment to Vercel
-
-If you wish to deploy the application to Vercel, follow these steps:
-
-### Backend Deployment
-
-1. Import the project in Vercel Dashboard
-2. Configure environment variables:
-   - All variables from `backend/.env.example`
-   - Set `USE_LOCAL_DB_FALLBACK=false` for production
-   - Add your Cosmos DB, Blob Storage credentials
-3. Deploy the backend service
-
-### Frontend Deployment
-
-1. Update `frontend/.env.production` with your backend URL
-2. Import the frontend project in Vercel Dashboard
-3. Deploy the frontend application
-
-### Post-Deployment Steps
-
-1. Create containers in Azure Blob Storage:
-   - `uploads`
-   - `processed`
-   - `results`
-
-2. Initialize Cosmos DB:
-   - The application will automatically create the database and containers on first run
-   - No manual initialization is required
 
 ## Usage
 
@@ -348,7 +268,7 @@ If you wish to deploy the application to Vercel, follow these steps:
 ### Project Structure
 
 ```
-FusionFly/
+LLMFGO/
 ├── frontend/           # React frontend
 │   ├── public/         # Static assets
 │   └── src/            # React components and logic
@@ -376,12 +296,6 @@ FusionFly/
 - [ ] Batch processing
 - [ ] User authentication and file management
 - [ ] Performance optimizations for large datasets
-
-## Troubleshooting
-
-- If file uploads fail, check your Blob Storage connection string
-- For authentication issues, verify your JWT secret
-- If you encounter Cosmos DB errors, ensure your endpoint and key are correct
 
 ## License
 

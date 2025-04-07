@@ -10,11 +10,12 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const fileRoutes_1 = require("./routes/fileRoutes");
+const authRoutes_1 = require("./routes/authRoutes");
 // Load environment variables
 dotenv_1.default.config();
 // Create Express app
 const app = (0, express_1.default)();
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 8002;
 // Create uploads directory if it doesn't exist
 const uploadsDir = path_1.default.join(__dirname, '../uploads');
 if (!fs_1.default.existsSync(uploadsDir)) {
@@ -27,6 +28,7 @@ app.use((0, morgan_1.default)('dev'));
 app.use('/uploads', express_1.default.static(uploadsDir));
 // Routes
 app.use('/api/files', fileRoutes_1.fileRoutes);
+app.use('/api/auth', authRoutes_1.authRoutes);
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.status(200).json({ status: 'ok' });

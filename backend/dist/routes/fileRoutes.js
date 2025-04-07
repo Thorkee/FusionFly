@@ -9,7 +9,6 @@ const multer_1 = __importDefault(require("multer"));
 const path_1 = __importDefault(require("path"));
 const uuid_1 = require("uuid");
 const fileController_1 = require("../controllers/fileController");
-const authMiddleware_1 = require("../middleware/authMiddleware");
 const router = express_1.default.Router();
 exports.fileRoutes = router;
 // Configure multer storage
@@ -47,6 +46,8 @@ router.post('/upload', upload.fields([
     { name: 'imuFile', maxCount: 1 }
 ]), fileController_1.fileController.uploadFile);
 router.get('/status/:id', fileController_1.fileController.getProcessingStatus);
+// Temporarily remove authentication for debugging
 router.get('/list', fileController_1.fileController.listFiles);
 // Admin-only routes
-router.post('/clear-cache', authMiddleware_1.authenticate, authMiddleware_1.authorizeAdmin, fileController_1.fileController.clearCache);
+// Temporarily remove auth requirements for clear-cache
+router.post('/clear-cache', fileController_1.fileController.clearCache);

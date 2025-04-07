@@ -548,17 +548,33 @@ function FileUpload() {
         </div>
       </div>
 
-      {/* Add a "View Processed Files" button after the upload button */}
+      {/* Processing completion message */}
       {processingComplete && (
-        <button
-          onClick={() => navigate('/files')}
-          className="btn btn-success ml-4 flex items-center"
-        >
-          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z"></path>
-          </svg>
-          View Processed Files
-        </button>
+        <div className="mt-6 bg-green-50 border border-green-200 p-4 rounded-md">
+          <div className="flex items-start">
+            <svg className="w-5 h-5 text-green-500 mt-0.5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <div>
+              <h3 className="text-lg font-medium text-green-800">Processing Complete!</h3>
+              <p className="text-sm text-green-700 mt-1">
+                Your file has been successfully processed. The AI has converted your data from raw format to a structured schema.
+                All data processing is complete and you can now view the results.
+              </p>
+              <div className="mt-3 flex items-center">
+                <button
+                  onClick={() => navigate('/files')}
+                  className="btn btn-success flex items-center"
+                >
+                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z"></path>
+                  </svg>
+                  View Processed Files
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

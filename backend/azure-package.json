@@ -1,0 +1,17 @@
+{
+  "name": "fusionfly-azure",
+  "version": "1.0.0",
+  "description": "FusionFly GNSS+IMU Data Processing - Azure Deployment",
+  "main": "azure-server.js",
+  "scripts": {
+    "start": "node azure-server.js"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "dotenv": "^16.4.5"
+  }
+} 

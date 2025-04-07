@@ -34,25 +34,22 @@ const fileFilter = (req: express.Request, file: Express.Multer.File, cb: multer.
 const upload = multer({ 
   storage, 
   fileFilter,
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB limit (increased from 100MB)
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
 });
 
 // Public routes
 router.get('/download/:filename', fileController.downloadFile); // Allow public downloads if needed
 
-// Temporarily make routes public for testing
-router.post('/upload', upload.fields([
+// Protected routes (require authentication)
+router.post('/upload', authenticate, upload.fields([
   { name: 'gnssFile', maxCount: 1 },
   { name: 'imuFile', maxCount: 1 }
 ]), fileController.uploadFile);
 
-router.get('/status/:id', fileController.getProcessingStatus);
-// Temporarily remove authentication for debugging
-router.get('/list', fileController.listFiles);
+router.get('/status/:id', authenticate, fileController.getProcessingStatus);
+router.get('/list', authenticate, fileController.listFiles);
 
 // Admin-only routes
-// Temporarily remove auth requirements for clear-cache
-router.post('/clear-cache', fileController.clearCache);
-// router.post('/clear-cache', authenticate, authorizeAdmin, fileController.clearCache);
+router.post('/clear-cache', authenticate, authorizeAdmin, fileController.clearCache);
 
 export { router as fileRoutes }; 
