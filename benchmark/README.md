@@ -194,3 +194,8 @@ python evaluation/benchmark.py --input-dir test_cases/normal/case1/ --output-dir
 3. Takasu, T., & Yasuda, A. (2009). Development of the low-cost RTK-GPS receiver with an open source program package RTKLIB. International Symposium on GPS/GNSS, 4-6.
 4. Zhang, J., & Singh, S. (2017). Low-drift and real-time lidar odometry and mapping. Autonomous Robots, 41(2), 401-416.
 5. Shan, T., Englot, B., Meyers, D., Wang, W., Ratti, C., & Rus, D. (2020). LIO-SAM: Tightly-coupled lidar inertial odometry via smoothing and mapping. IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS), 5135-5142.
+
+## Benchmark Methodology
+
+For a detailed explanation of the benchmark methodology, including data collection, evaluation framework, testing process, and continuous improvement procedures, please refer to the [METHODOLOGY.md](METHODOLOGY.md) document.
+
