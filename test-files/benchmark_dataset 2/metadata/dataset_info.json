@@ -1,0 +1,94 @@
+{
+  "name": "Navigation Data Standardization Benchmark",
+  "version": "1.0.0",
+  "description": "A benchmark dataset for evaluating AI agents that transform unformatted navigation data to formatted data ready for Factor Graph Optimization (FGO).",
+  "created_at": "2025-04-09T05:00:34.148842",
+  "data_source": "UrbanNav Dataset (https://github.com/IPNL-POLYU/UrbanNavDataset)",
+  "environments": [
+    {
+      "name": "Medium Urban",
+      "description": "Typical urban canyon with high-rising buildings and numerous dynamic objects."
+    }
+  ],
+  "test_cases": {
+    "normal": [
+      {
+        "id": "case1",
+        "description": "Medium Urban Environment with GNSS (NMEA) and IMU data",
+        "data_types": [
+          "GNSS (NMEA)",
+          "IMU"
+        ]
+      },
+      {
+        "id": "case2",
+        "description": "Medium Urban Environment with GNSS (OBS) and IMU data",
+        "data_types": [
+          "GNSS (OBS)",
+          "IMU"
+        ]
+      },
+      {
+        "id": "case3",
+        "description": "Tunnel Environment (IMU only)",
+        "data_types": [
+          "IMU"
+        ]
+      }
+    ],
+    "edge_cases": [
+      {
+        "id": "missing_data",
+        "description": "Data with missing fields",
+        "data_types": [
+          "GNSS",
+          "IMU"
+        ]
+      },
+      {
+        "id": "corrupted_data",
+        "description": "Data with corrupted values",
+        "data_types": [
+          "GNSS",
+          "IMU"
+        ]
+      },
+      {
+        "id": "format_variations",
+        "description": "Variations in data format",
+        "data_types": [
+          "GNSS",
+          "IMU"
+        ]
+      }
+    ]
+  },
+  "evaluation_metrics": [
+    {
+      "name": "Conversion Accuracy",
+      "description": "Measures how accurately the AI agent converts raw data to standardized format",
+      "metrics": [
+        "Position Error (m)",
+        "Orientation Error (deg)",
+        "Matched Points (%)"
+      ]
+    },
+    {
+      "name": "Conversion Speed",
+      "description": "Measures how quickly the AI agent processes the data",
+      "metrics": [
+        "Total Time (s)",
+        "Average Time per File (s)",
+        "Peak Memory Usage (MB)"
+      ]
+    },
+    {
+      "name": "Robustness",
+      "description": "Measures how well the AI agent handles edge cases",
+      "metrics": [
+        "Success Rate (%)",
+        "Error Recovery Rate (%)"
+      ]
+    }
+  ]
+}

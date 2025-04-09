@@ -1,0 +1,39 @@
+{
+  "timestamp": "2025-04-09T05:00:34.150494",
+  "test_case": "case1",
+  "accuracy": {
+    "gnss": {
+      "mean_position_error_m": 0.0,
+      "max_position_error_m": 0.0,
+      "min_position_error_m": 0.0,
+      "std_position_error_m": 0.0,
+      "num_matched_points": 0,
+      "matched_percentage": 0.0
+    },
+    "imu": {
+      "orientation": {
+        "mean_orientation_error_deg": 0.0,
+        "max_orientation_error_deg": 0.0,
+        "min_orientation_error_deg": 0.0,
+        "std_orientation_error_deg": 0.0,
+        "num_matched_points": 0,
+        "matched_percentage": 0.0
+      },
+      "acceleration": {
+        "mean_acceleration_error_mps2": 0.0,
+        "max_acceleration_error_mps2": 0.0,
+        "min_acceleration_error_mps2": 0.0,
+        "std_acceleration_error_mps2": 0.0,
+        "num_matched_points": 0,
+        "matched_percentage": 0.0
+      }
+    }
+  },
+  "performance": {
+    "total_time_seconds": 0.0,
+    "files_processed": 0,
+    "average_time_per_file_seconds": 0.0,
+    "peak_memory_usage_mb": 0.0,
+    "average_cpu_percent": 0.0
+  }
+}

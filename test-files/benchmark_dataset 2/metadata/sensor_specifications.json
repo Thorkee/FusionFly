@@ -1,0 +1,47 @@
+{
+  "gnss": {
+    "receivers": [
+      {
+        "name": "u-blox ZED-F9P",
+        "type": "Multi-band GNSS receiver",
+        "frequency": "1 Hz",
+        "accuracy": "RTK: 1 cm + 1 ppm CEP"
+      },
+      {
+        "name": "u-blox EVK-M8T",
+        "type": "Single-band GNSS receiver",
+        "frequency": "1 Hz",
+        "accuracy": "2.5 m CEP"
+      }
+    ],
+    "data_formats": [
+      {
+        "name": "NMEA",
+        "description": "Standard NMEA 0183 sentences (GGA, RMC, GSV, GSA, etc.)"
+      },
+      {
+        "name": "RINEX",
+        "description": "Receiver Independent Exchange Format v3.02"
+      }
+    ]
+  },
+  "imu": {
+    "sensors": [
+      {
+        "name": "Xsens MTi 10",
+        "type": "MEMS IMU",
+        "frequency": "400 Hz",
+        "gyroscope": {
+          "range": "\u00b1450 deg/s",
+          "bias_stability": "10 deg/hr",
+          "noise_density": "0.01 deg/s/\u221aHz"
+        },
+        "accelerometer": {
+          "range": "\u00b116 g",
+          "bias_stability": "15 \u03bcg",
+          "noise_density": "60 \u03bcg/\u221aHz"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "gnss_data": {
+    "description": "Standardized GNSS data format",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "gnss_data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time_unix": {
+                "type": "number",
+                "description": "Unix timestamp in seconds"
+              },
+              "position_lla": {
+                "type": "object",
+                "properties": {
+                  "latitude_deg": {
+                    "type": "number",
+                    "description": "Latitude in degrees"
+                  },
+                  "longitude_deg": {
+                    "type": "number",
+                    "description": "Longitude in degrees"
+                  },
+                  "altitude_m": {
+                    "type": "number",
+                    "description": "Altitude in meters"
+                  }
+                },
+                "required": [
+                  "latitude_deg",
+                  "longitude_deg",
+                  "altitude_m"
+                ]
+              },
+              "clock_error_estimate": {
+                "type": "number",
+                "description": "Estimated clock error in seconds"
+              },
+              "dop": {
+                "type": "number",
+                "description": "Dilution of Precision"
+              }
+            },
+            "required": [
+              "time_unix",
+              "position_lla"
+            ]
+          }
+        }
+      },
+      "required": [
+        "gnss_data"
+      ]
+    }
+  },
+  "imu_data": {
+    "description": "Standardized IMU data format",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "imu_data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "time_unix": {
+                "type": "number",
+                "description": "Unix timestamp in seconds"
+              },
+              "linear_acceleration": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "description": "X-axis acceleration in m/s\u00b2"
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Y-axis acceleration in m/s\u00b2"
+                  },
+                  "z": {
+                    "type": "number",
+                    "description": "Z-axis acceleration in m/s\u00b2"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "z"
+                ]
+              },
+              "angular_velocity": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number",
+                    "description": "X-axis angular velocity in rad/s"
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Y-axis angular velocity in rad/s"
+                  },
+                  "z": {
+                    "type": "number",
+                    "description": "Z-axis angular velocity in rad/s"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "z"
+                ]
+              },
+              "orientation": {
+                "type": "object",
+                "properties": {
+                  "w": {
+                    "type": "number",
+                    "description": "W component of quaternion"
+                  },
+                  "x": {
+                    "type": "number",
+                    "description": "X component of quaternion"
+                  },
+                  "y": {
+                    "type": "number",
+                    "description": "Y component of quaternion"
+                  },
+                  "z": {
+                    "type": "number",
+                    "description": "Z component of quaternion"
+                  }
+                },
+                "required": [
+                  "w",
+                  "x",
+                  "y",
+                  "z"
+                ]
+              }
+            },
+            "required": [
+              "time_unix",
+              "linear_acceleration",
+              "angular_velocity",
+              "orientation"
+            ]
+          }
+        }
+      },
+      "required": [
+        "imu_data"
+      ]
+    }
+  }
+}
