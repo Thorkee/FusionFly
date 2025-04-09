@@ -93,7 +93,13 @@ The benchmark employs a comprehensive set of scientific metrics to evaluate the 
 #### 1.1 Numerical Field Transformation Accuracy
 
 - **Mean Absolute Error (MAE)**: Average absolute difference between original and transformed field values
-  - Formula: MAE = (1/n) * Σ|x_transformed - x_original|
+  - ```
+MAE = (1/n) * Σ|Xᵢᵗʳᵃⁿˢᶠᵒʳᵐᵉᵈ - Xᵢᵒʳᶦᵍᶦⁿᵃˡ|
+```
+where:
+- n is the number of samples
+- Xᵢᵗʳᵃⁿˢᶠᵒʳᵐᵉᵈ is the transformed value
+- Xᵢᵒʳᶦᵍᶦⁿᵃˡ is the original value
   - Calculated separately for each critical numerical field (coordinates, timestamps, velocities, etc.)
 
 - **Root Mean Square Error (RMSE)**: Square root of the average squared difference
