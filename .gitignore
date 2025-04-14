@@ -105,4 +105,5 @@ dump.rdb
 
 # Uploads directory content (keep directory)
 /backend/uploads/*
-!/backend/uploads/.gitkeep 
+!/backend/uploads/.gitkeep
+public/assets/FusionFly Demo.mov
