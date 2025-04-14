@@ -106,13 +106,40 @@ FusionFly implements robust validation and fallback mechanisms for each LLM step
   - Includes examples of proper formatting in error feedback
   - Retries with progressive reinforcement learning pattern
 
-#### Schema Conversion (Third LLM)
-- **Script Generation**: LLM generates a specialized Node.js script to transform location data to target schema format
-- **Validation**: System executes the script and ensures strict conformance to target schema structure with proper nesting and field types
-- **Fallback Mechanism**:
-  - Detects schema validation errors and provides detailed feedback
-  - Makes multiple attempts with increasingly specific instructions
-  - Ensures final output conforms to required data structure
+#### Schema Conversion (Third LLM) - Enhanced Two-Submodule Approach
+- **Submodule 1: Direct Schema Conversion**
+  - Takes a small sample of data from Module 2 (location data)
+  - Directly converts it to the target schema format without generating code
+  - Validates the converted sample against schema requirements
+  - Produces a set of high-quality examples to guide the second submodule
+  - Prompt focuses on direct data transformation, not code generation
+
+- **Submodule 2: Transformation Script Generation**
+  - Takes both raw data and the converted examples from Submodule 1
+  - Generates a Node.js transformation script based on the pattern shown in the examples
+  - Script is executed to process the entire dataset
+  - Output is validated against schema requirements
+  - Prompt includes both input data and properly formatted examples for pattern matching
+
+- **Enhanced Validation and Feedback Flow**:
+  - If Submodule 1 fails, the entire process fails (since examples are required for Submodule 2)
+  - Detailed error messages identify specific schema non-compliance issues
+  - Output from both submodules is validated against target schema
+  - Retries with improved instructions based on specific validation failures
+
+### Third LLM Pipeline Architecture
+
+The detailed architecture of the enhanced third LLM module is illustrated below:
+
+![Third LLM Two-Submodule Architecture](/public/assets/Module3_Flpw.png)
+
+This diagram shows how the system first attempts direct schema conversion with Submodule 1, then uses both the original data and converted examples to generate a transformation script with Submodule 2. The script is then executed to process the entire dataset, with validation at each step ensuring compliance with the pre-defined schema.
+
+The complete data transformation pipeline across all three modules is shown here:
+
+![Complete LLM Pipeline](/public/assets/FYP_LLM_Pipeline_000.png)
+
+This end-to-end view shows how each module contributes to the overall transformation process, from format conversion through location extraction to the final schema conversion.
 
 #### Unit Testing
 - Comprehensive test suite covers each LLM step with:
@@ -140,7 +167,9 @@ This multi-layer validation and fallback approach ensures robust processing even
 
 5. **Schema Conversion**
    - After converting to JSONL, extracts data entries to the target schema
-   - Calls Azure OpenAI service to generate a specialized Python script for schema conversion
+   - Uses the enhanced two-submodule approach:
+     1. First directly converts a small sample to the target schema
+     2. Then generates a script using both raw data and converted examples
    - Handles complex field mappings and data transformations
    - Applies data cleaning and normalization rules
    - Produces structurally consistent output conforming to the target schema
@@ -237,6 +266,140 @@ Long-running processing tasks are handled by a Redis-backed job queue:
    - File conversion
    - Data processing
    - Result generation
+
+## Benchmark System
+
+FusionFly includes a comprehensive scientific benchmark system for evaluating the accuracy, robustness, and efficiency of navigation data transformation processes.
+
+### Benchmark Architecture
+
+The benchmark system is organized as follows:
+
+```
+benchmark/
+├── raw/                # Raw, unformatted navigation data
+│   ├── gnss/           # GNSS data in various formats
+│   └── imu/            # IMU data in various formats
+├── standardized/       # Standardized data (ground truth)
+├── test_cases/         # Test cases for benchmarking
+│   ├── normal/         # Normal operating scenarios
+│   └── edge_cases/     # Challenging data scenarios
+├── metadata/           # Dataset and schema information
+├── evaluation/         # Evaluation tools and metrics
+└── results/            # Benchmark results
+```
+
+### Test Case Design
+
+The benchmark includes carefully constructed test scenarios:
+
+1. **Normal Test Cases**:
+   - Medium Urban Environment with NMEA
+   - Medium Urban Environment with RINEX OBS
+   - Tunnel Environment (IMU-only)
+
+2. **Edge Cases**:
+   - Missing Data: Files with various fields removed (5-30%)
+   - Corrupted Data: Files with invalid/extreme values
+   - Format Variations: Different field ordering, units, etc.
+
+### Scientific Evaluation Metrics
+
+#### 1. Data Field Accuracy Metrics
+
+These metrics quantify how precisely the transformed data matches ground truth values across all navigation parameters.
+
+**Implementation Logic:**
+- Points from ground truth and transformed datasets are matched by timestamps
+- Field-by-field comparison is performed using dot notation (e.g., `position_lla.latitude_deg`)
+- Statistical measures are calculated for each field
+
+**Core Metrics:**
+- **Mean Absolute Error (MAE)**: Average absolute difference between original and transformed values
+  ```python
+  mae = np.mean(errors)  # Simple, interpretable measure of error magnitude
+  ```
+- **Root Mean Square Error (RMSE)**: Square root of average squared differences
+  ```python
+  rmse = np.sqrt(np.mean(np.array(errors) ** 2))  # Penalizes larger errors
+  ```
+- **Normalized RMSE**: RMSE normalized by the range of original values
+  ```python
+  nrmse = rmse / (max(gt_values) - min(gt_values))  # Makes errors comparable across different measurement types
+  ```
+
+**Specialized Accuracy Metrics:**
+- Coordinate transformation accuracy (ECEF↔LLA)
+- Timestamp conversion precision (microseconds)
+- Sampling rate preservation
+- Structural schema compliance
+
+#### 2. Robustness Metrics
+
+These metrics evaluate how well the system handles variations, edge cases, and challenging inputs.
+
+**Implementation Logic:**
+- Test files contain intentionally corrupted or challenging data
+- System processes these files and results are compared to expected handling
+- Specific types of data corruption are systematically introduced:
+  ```json
+  {
+    "time_unix": 1621218775.5489783,
+    "linear_acceleration": {
+      "x": 100.0,  // Extreme value (corrupted)
+      "y": -100.0, // Extreme value (corrupted)
+      "z": 100.0   // Extreme value (corrupted)
+    }
+  }
+  ```
+
+**Core Metrics:**
+- **Success Rate**: Percentage of edge cases successfully processed
+- **Error Recovery Rate**: Percentage of corrupted data points properly handled
+- **Accuracy Under Stress**: Field accuracy metrics on edge case data
+
+**Specialized Robustness Metrics:**
+- Missing data handling at 5%, 10%, 20%, and 30% levels
+- Outlier detection and filtering performance
+- Special value handling (NaN, infinity, null)
+- Response to inconsistent sampling rates
+
+#### 3. Efficiency Metrics
+
+These metrics measure the computational resources required for data transformation.
+
+**Implementation Logic:**
+- Performance monitoring during transformation process
+- Resource usage tracking using `psutil` library
+
+**Core Metrics:**
+- **Transformation Time**: Processing time per data point
+- **Peak Memory Usage**: Maximum memory consumption during processing
+- **CPU Utilization**: Average and peak CPU usage percentage
+- **Size Ratio**: Ratio of transformed data size to original data size
+
+### Benchmark Automation
+
+The benchmark system is fully automated:
+
+```bash
+# Run the complete benchmark suite
+./run_benchmark.sh
+
+# Evaluate specific test cases
+python evaluation/metrics.py --ground-truth standardized/ --converted results/
+python evaluation/benchmark.py --input-dir test_cases/normal/case1/ --output-dir results/
+```
+
+### Visualization and Reporting
+
+The benchmark generates comprehensive reports with:
+- Statistical summaries of all metrics
+- Field-by-field comparisons between original and transformed data
+- Error distribution visualizations
+- Overall quality score based on weighted metrics
+
+For detailed technical information about metrics implementation, see [Benchmark Metrics Implementation](benchmark/METRICS_IMPLEMENTATION.md).
 
 ## Detailed Process Flow
 
