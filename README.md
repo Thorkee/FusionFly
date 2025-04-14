@@ -11,7 +11,7 @@ FusionFly is an open-source toolkit for processing and fusing GNSS (Global Navig
 
 Check out the FusionFly demo video to see the system in action:
 
-https://youtu.be/oGyyChs1mSo
+[![FusionFly Demo](https://img.youtube.com/vi/oGyyChs1mSo/hqdefault.jpg)](https://youtu.be/oGyyChs1mSo)
 
 You can also:
 - [Download the Demo Video](./public/assets/FusionFly%20Demo.mov) directly from the repository
