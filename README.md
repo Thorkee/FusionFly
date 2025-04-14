@@ -564,7 +564,19 @@ FusionFly/
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License with Citation Requirements. When using FusionFly, you must cite:
+
+1. The original research paper:
+   ```
+   M. J. L. Lee, J. Lin and L. -T. Hsu, "Exploring the Feasibility of Automated Data Standardization using Large Language Models for Seamless Positioning," 2024 14th International Conference on Indoor Positioning and Indoor Navigation (IPIN), Kowloon, Hong Kong, 2024, pp. 1-6, doi: 10.1109/IPIN62893.2024.10786123.
+   ```
+
+2. The FusionFly repository:
+   ```
+   https://github.com/Thorkee/FusionFly
+   ```
+
+See the [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
