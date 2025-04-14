@@ -21,6 +21,8 @@ You can also:
 ## System Architecture
 
 FusionFly follows a standard client-server architecture with a React frontend, Express.js backend, and Redis job queue for processing large files.
+
+![FusionFly Architecture](./public/assets/Fusionsly%20Arch.png)
                             
 ```
 ┌─────────────────┐          ┌─────────────────┐          ┌─────────────────┐
@@ -189,6 +191,8 @@ Each step includes comprehensive error handling and logging, allowing for detail
 ## Data Flow Pipeline
 
 FusionFly processes data through a well-defined pipeline:
+
+![FusionFly Flow Diagram](./public/assets/fusionfly_flow.png)
 
 ```
 ┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐
