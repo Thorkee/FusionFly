@@ -1,4 +1,4 @@
-# FusionFly: GNSS+IMU Data Fusion System
+# FusionFly: A Scalable Open-Source Framework for AI-Powered Positioning Data Standardization
 
 ![FusionFly](https://img.shields.io/badge/FusionFly-v1.0.0-4a90e2?style=for-the-badge&logo=appveyor)
 [![FusionFly Wiki](https://img.shields.io/badge/Documentation-Wiki-6caa5f?style=for-the-badge&logo=github)](https://github.com/Thorkee/FusionFly/wiki)
