@@ -6,6 +6,18 @@
 ![Node.js](https://img.shields.io/badge/Node.js-16.x-43853d?style=for-the-badge&logo=node.js&logoColor=white)
 
 FusionFly is an open-source toolkit for processing and fusing GNSS (Global Navigation Satellite System) and IMU (Inertial Measurement Unit) data with Factor Graph Optimization (FGO). The system provides a modern web interface for uploading, processing, visualizing, and downloading standardized navigation data.           
+
+## Demo
+
+Check out the FusionFly demo video to see the system in action:
+
+https://github.com/Thorkee/FusionFly/assets/main/public/assets/FusionFly%20Demo.mov
+
+You can also:
+- [Download the Demo Video](./public/assets/FusionFly%20Demo.mov) directly from the repository
+
+*Note: After cloning the repository, you can find the demo video in the public/assets directory.*
+
 ## System Architecture
 
 FusionFly follows a standard client-server architecture with a React frontend, Express.js backend, and Redis job queue for processing large files.
@@ -77,28 +89,30 @@ FusionFly processes data through a standardization pipeline:
 FusionFly implements robust validation and fallback mechanisms for each LLM step in the AI-assisted conversion pipeline:
 
 #### Format Conversion (First LLM)
-- **Validation**: Specialized validator checks that output conforms to expected JSONL format with required fields
+- **Script Generation**: LLM generates a complete Node.js script to process the input file
+- **Validation**: System executes the generated script and validates that output conforms to expected JSONL format
 - **Fallback Mechanism**: 
-  - When conversion produces invalid output, the system captures specific errors (missing fields, invalid JSON, etc.)
+  - When the script fails to execute or produces invalid output, the system captures specific errors
   - Error details are fed back to the LLM in a structured format for improved retry
-  - The LLM is instructed to fix specific issues in its subsequent attempt
+  - The LLM is instructed to fix specific issues in its subsequent script generation attempt
   - System makes up to 3 attempts with increasingly detailed error feedback
 
 #### Location Extraction (Second LLM)
-- **Validation**: Validates coordinates (latitude/longitude in correct ranges), timestamps, and required field presence
+- **Script Generation**: LLM generates a specialized Node.js script to extract location data from the first-stage output
+- **Validation**: System executes the script and validates coordinates (latitude/longitude in correct ranges), timestamps, and required field presence
 - **Fallback Mechanism**:
-  - Detects missing or invalid location data in extraction output
+  - Detects script execution errors or missing/invalid location data in extraction output
   - Provides field-specific guidance to the LLM about conversion issues
   - Includes examples of proper formatting in error feedback
   - Retries with progressive reinforcement learning pattern
 
 #### Schema Conversion (Third LLM)
-- **Validation**: Ensures strict conformance to target schema structure with proper nesting and field types
+- **Script Generation**: LLM generates a specialized Node.js script to transform location data to target schema format
+- **Validation**: System executes the script and ensures strict conformance to target schema structure with proper nesting and field types
 - **Fallback Mechanism**:
-  - Validates against a formal schema definition
-  - For GNSS data: Validates position_lla structure with latitude_deg, longitude_deg, and altitude_m fields
-  - For IMU data: Validates quaternion orientation and acceleration vectors
-  - Feeds schema violations back to the LLM with structural correction instructions
+  - Detects schema validation errors and provides detailed feedback
+  - Makes multiple attempts with increasingly specific instructions
+  - Ensures final output conforms to required data structure
 
 #### Unit Testing
 - Comprehensive test suite covers each LLM step with:
