@@ -192,8 +192,6 @@ Each step includes comprehensive error handling and logging, allowing for detail
 
 FusionFly processes data through a well-defined pipeline:
 
-![FusionFly Flow Diagram](./public/assets/fusionfly_flow.png)
-
 ```
 ┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐     ┌───────────┐
 │           │     │           │     │           │     │           │     │           │
