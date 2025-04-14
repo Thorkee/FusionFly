@@ -223,6 +223,8 @@ export class LocationExtractionValidator extends BaseValidator {
     
     const errors: string[] = [];
     const warnings: string[] = [...jsonlResult.warnings];
+    let fixedMissingTypeFields = false;
+    let typeFieldMissingCount = 0;
     
     try {
       const fileStream = fs.createReadStream(this.filePath);
@@ -234,6 +236,7 @@ export class LocationExtractionValidator extends BaseValidator {
       let lineNumber = 0;
       let prevTimestamp: number | null = null;
       
+      // First pass: validate records
       for await (const line of rl) {
         lineNumber++;
         
@@ -258,6 +261,7 @@ export class LocationExtractionValidator extends BaseValidator {
           // Check for type field
           if (!('type' in record)) {
             warnings.push(`Line ${lineNumber}: Missing type field`);
+            typeFieldMissingCount++;
           }
           
           // Check location data
@@ -294,6 +298,45 @@ export class LocationExtractionValidator extends BaseValidator {
           }
         } catch (e) {
           // Skip, already validated in validateJsonlFormat
+        }
+      }
+      
+      // Fix missing type fields if they're the only issue
+      if (errors.length === 0 && typeFieldMissingCount > 0) {
+        console.log(`Found ${typeFieldMissingCount} records missing type field. Adding default type field.`);
+        // Re-read the file and fix missing type fields
+        const lines: string[] = [];
+        const readStream = fs.createReadStream(this.filePath, 'utf8');
+        const readRl = readline.createInterface({
+          input: readStream,
+          crlfDelay: Infinity
+        });
+        
+        for await (const line of readRl) {
+          if (!line.trim()) {
+            lines.push(line);
+            continue;
+          }
+          
+          try {
+            const record = JSON.parse(line);
+            if (!('type' in record)) {
+              record.type = 'gnss'; // Add default type
+              lines.push(JSON.stringify(record));
+              fixedMissingTypeFields = true;
+            } else {
+              lines.push(line);
+            }
+          } catch (e) {
+            lines.push(line);
+          }
+        }
+        
+        if (fixedMissingTypeFields) {
+          fs.writeFileSync(this.filePath, lines.join('\n'), 'utf8');
+          console.log(`Fixed missing type fields in ${this.filePath}`);
+          // Add a warning to notify about the fix
+          warnings.push(`Added missing type field to ${typeFieldMissingCount} records`);
         }
       }
       

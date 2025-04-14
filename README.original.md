@@ -69,19 +69,20 @@ FusionFly processes data through a standardization pipeline:
 
 3. **AI-Assisted Parsing**
    - If standard script is not working, it will call Azure OpenAI service with a snippet of data
-   - Executes the generated conversion code automatically in the backend
-   - Provides detailed error information to improve subsequent attempts
+   - The LLM generates a complete, executable conversion script for automatic execution in the backend
+   - Each LLM in the pipeline (format conversion, location extraction, schema conversion) generates specialized scripts
+   - System executes these scripts and provides detailed error feedback for subsequent attempts
+   - Includes robust validation and fallback mechanisms for all pipeline stages
 
 4. **Conversion Validation**
-   - Runs comprehensive unit tests on the converted data
-   - Validates correct JSONL formatting and data integrity
-   - If validation fails, feeds the error data to the LLM
-   - Regenerates conversion scripts up to 10 times until correctly converted to JSONL
+   - Validates script execution and output integrity at each stage
+   - Checks for correct JSONL formatting and required fields
+   - If validation fails, feeds the error data back to the LLM
+   - Regenerates conversion scripts up to 3 times with increasingly specific instructions
 
 5. **Schema Conversion**
-   - After converting to JSONL, extracts data entries to the target schema
-   - Calls Azure OpenAI service to generate a specialized Python script for schema conversion
-   - Handles complex field mappings and data transformations
+   - After converting to JSONL, the third LLM generates a specialized script to map data to the target schema
+   - The system executes this script to handle complex field mappings and data transformations
    - Applies data cleaning and normalization rules
    - Produces structurally consistent output conforming to the target schema
 

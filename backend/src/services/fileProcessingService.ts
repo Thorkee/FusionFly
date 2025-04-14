@@ -9,7 +9,12 @@ import * as nmeaSimple from 'nmea-simple';
 import { UBXParser } from '@csllc/ubx-parser';
 import { readFile as fsReadFile } from 'fs/promises';
 import * as blobStorageService from './blobStorageService';
-import { aiAssistedConversion } from './aiService';
+import { 
+  aiAssistedConversion, 
+  generateTransformationScript, 
+  directSchemaConversion,
+  readFileSample 
+} from './aiService';
 import { validateLlmOutput } from './validationService';
 
 // Load environment variables
@@ -291,49 +296,61 @@ fileProcessingQueue.process(async (job) => {
         
         // Use AI conversion for this step with multiple attempts
         await job.update({ 
-          stage: 'second_conversion_ai', 
-          message: 'Using AI to convert location data to structured schema format...' 
+          stage: 'third_llm_submodule1', 
+          message: 'Submodule 1: Direct sample conversion to schema format...' 
         });
         
         console.log(`THIRD LLM: Input Path: ${locationFilePath}, Output Path: ${structuredFilePath}`);
         
-        // Make up to 3 attempts for schema conversion
-        let schemaResult;
-        let schemaAttempts = 0;
-        const MAX_SCHEMA_ATTEMPTS = 3;
-
-        while (schemaAttempts < MAX_SCHEMA_ATTEMPTS) {
-          schemaAttempts++;
-          
-          await job.update({ 
-            stage: 'schema_conversion', 
-            message: `Converting to schema format${schemaAttempts > 1 ? ` (attempt ${schemaAttempts})` : ''}...` 
-          });
-          
-          console.log(`\n========== THIRD LLM: SCHEMA CONVERSION (ATTEMPT ${schemaAttempts}/${MAX_SCHEMA_ATTEMPTS}) ==========\n`);
-          schemaResult = await aiAssistedConversion(locationFilePath, structuredFilePath, schemaFormat);
-          console.log(`\n========== THIRD LLM COMPLETE ==========\n`);
-          
-          if (schemaResult.success) {
-            break; // Success, no need for further attempts
-          } else if (schemaAttempts < MAX_SCHEMA_ATTEMPTS) {
-            console.error(`Schema conversion failed on attempt ${schemaAttempts}. Retrying...`);
-            await job.update({ 
-              stage: 'schema_conversion_retry', 
-              message: `Schema conversion failed. Retrying (${schemaAttempts}/${MAX_SCHEMA_ATTEMPTS})...`,
-              details: { error: schemaResult.error }
-            });
-          }
+        // Read a sample from the location data file
+        const locationSample = await readFileSample(locationFilePath, 5, 4096);
+        if (!locationSample) {
+          console.error(`Failed to read sample from location data file: ${locationFilePath}`);
+          throw new Error(`Failed to read sample from location data file`);
         }
-
-        if (!schemaResult || !schemaResult.success) {
-          console.error(`Schema conversion failed after ${MAX_SCHEMA_ATTEMPTS} attempts: ${schemaResult?.error}`);
+        
+        console.log(`\n========== THIRD LLM SUBMODULE 1: DIRECT SCHEMA CONVERSION ==========\n`);
+        // Call the first submodule to directly convert a sample
+        const directConversionResult = await directSchemaConversion(locationSample, schemaFormat);
+        console.log(`\n========== THIRD LLM SUBMODULE 1 COMPLETE ==========\n`);
+        
+        if (!directConversionResult.success || !directConversionResult.convertedSample) {
+          console.error(`Direct schema conversion failed: ${directConversionResult.error}`);
           await job.update({ 
-            stage: 'second_conversion_failed', 
-            message: `GNSS schema conversion failed after ${MAX_SCHEMA_ATTEMPTS} attempts: ${schemaResult?.error}`,
-            details: { error: schemaResult?.error }
+            stage: 'third_llm_submodule1_failed', 
+            message: `Direct schema conversion failed: ${directConversionResult.error}`,
+            details: { error: directConversionResult.error }
           });
-          throw new Error(`GNSS schema conversion failed after ${MAX_SCHEMA_ATTEMPTS} attempts: ${schemaResult?.error}`);
+          throw new Error(`Direct schema conversion failed: ${directConversionResult.error}`);
+        }
+        
+        console.log(`Direct schema conversion successful. Sample converted successfully.`);
+        
+        // Proceed to submodule 2 - generate and execute transformation script
+        await job.update({ 
+          stage: 'third_llm_submodule2', 
+          message: 'Submodule 2: Generating transformation script based on sample conversion...' 
+        });
+        
+        console.log(`\n========== THIRD LLM SUBMODULE 2: TRANSFORMATION SCRIPT GENERATION ==========\n`);
+        // Use the sample conversion to guide the script generation
+        const transformationResult = await generateTransformationScript(
+          locationFilePath, 
+          structuredFilePath, 
+          schemaFormat,
+          0, // Initial retry count
+          directConversionResult.convertedSample // Pass the converted sample as a guide
+        );
+        console.log(`\n========== THIRD LLM SUBMODULE 2 COMPLETE ==========\n`);
+        
+        if (!transformationResult.success) {
+          console.error(`Transformation script generation failed: ${transformationResult.error}`);
+          await job.update({ 
+            stage: 'third_llm_submodule2_failed', 
+            message: `Transformation script generation failed: ${transformationResult.error}`,
+            details: { error: transformationResult.error }
+          });
+          throw new Error(`Transformation script generation failed: ${transformationResult.error}`);
         }
         
         // Verify third LLM output file exists
@@ -480,16 +497,61 @@ fileProcessingQueue.process(async (job) => {
         console.log(`PATH FLOW: IMU FIRST LLM OUTPUT → ${jsonlFilePath} → IMU SECOND LLM INPUT`);
         console.log(`IMU SECOND LLM: Input Path: ${jsonlFilePath}, Output Path: ${schemaConversionPath}`);
         
-        const imuConversionResult = await aiAssistedConversion(jsonlFilePath, schemaConversionPath, 'imu');
+        // Use the two-submodule approach for IMU conversion as well
+        await job.update({ 
+          stage: 'third_llm_submodule1_imu', 
+          message: 'Submodule 1: Direct IMU sample conversion to schema format...' 
+        });
         
-        if (!imuConversionResult.success) {
-          console.error(`IMU schema conversion failed: ${imuConversionResult.error}`);
+        // Read a sample from the IMU location data file
+        const imuSample = await readFileSample(jsonlFilePath, 5, 4096);
+        if (!imuSample) {
+          console.error(`Failed to read sample from IMU data file: ${jsonlFilePath}`);
+          throw new Error(`Failed to read sample from IMU data file`);
+        }
+        
+        console.log(`\n========== THIRD LLM SUBMODULE 1: IMU DIRECT SCHEMA CONVERSION ==========\n`);
+        // Call the first submodule to directly convert a sample
+        const imuDirectConversionResult = await directSchemaConversion(imuSample, 'imu_schema');
+        console.log(`\n========== THIRD LLM SUBMODULE 1 IMU COMPLETE ==========\n`);
+        
+        if (!imuDirectConversionResult.success || !imuDirectConversionResult.convertedSample) {
+          console.error(`IMU direct schema conversion failed: ${imuDirectConversionResult.error}`);
           await job.update({ 
-            stage: 'second_conversion_failed_imu', 
-            message: `IMU schema conversion failed: ${imuConversionResult.error}`,
-            details: { error: imuConversionResult.error }
+            stage: 'third_llm_submodule1_failed_imu', 
+            message: `IMU direct schema conversion failed: ${imuDirectConversionResult.error}`,
+            details: { error: imuDirectConversionResult.error }
           });
-          throw new Error(`IMU schema conversion failed: ${imuConversionResult.error}`);
+          throw new Error(`IMU direct schema conversion failed: ${imuDirectConversionResult.error}`);
+        }
+        
+        console.log(`IMU direct schema conversion successful. Sample converted successfully.`);
+        
+        // Proceed to submodule 2 - generate and execute transformation script
+        await job.update({ 
+          stage: 'third_llm_submodule2_imu', 
+          message: 'Submodule 2: Generating IMU transformation script based on sample conversion...' 
+        });
+        
+        console.log(`\n========== THIRD LLM SUBMODULE 2: IMU TRANSFORMATION SCRIPT GENERATION ==========\n`);
+        // Use the sample conversion to guide the script generation
+        const imuTransformationResult = await generateTransformationScript(
+          jsonlFilePath, 
+          schemaConversionPath, 
+          'imu_schema',
+          0, // Initial retry count
+          imuDirectConversionResult.convertedSample // Pass the converted sample as a guide
+        );
+        console.log(`\n========== THIRD LLM SUBMODULE 2 IMU COMPLETE ==========\n`);
+        
+        if (!imuTransformationResult.success) {
+          console.error(`IMU transformation script generation failed: ${imuTransformationResult.error}`);
+          await job.update({ 
+            stage: 'third_llm_submodule2_failed_imu', 
+            message: `IMU transformation script generation failed: ${imuTransformationResult.error}`,
+            details: { error: imuTransformationResult.error }
+          });
+          throw new Error(`IMU transformation script generation failed: ${imuTransformationResult.error}`);
         }
         
         // Verify IMU second LLM output file exists
@@ -1188,7 +1250,7 @@ function extractLocationFromRecord(record: any): any {
   const timestamp_ms = record.timestamp_ms || record.time_unix || null;
   
   return {
-    type: record.type || 'gnss',
+    type: record.type || 'gnss', // Always include the type field, default to "gnss"
     timestamp_ms: timestamp_ms,
     timestamp: timestamp_ms ? new Date(timestamp_ms).toISOString() : (record.timestamp || null),
     latitude: record.latitude,
